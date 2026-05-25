@@ -57,7 +57,7 @@ export default function App() {
 
       {!isHome && (
         <footer className="max-w-4xl mx-auto px-4 py-8 text-xs text-slate-500">
-          Powered by LinkTEc - Compunet Cotoca
+          Powered by LinkTEC - Compunet Cotoca
         </footer>
       )}
     </div>
