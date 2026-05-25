@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, API_BASE, getToken, setToken } from "../api";
+import { api, API_BASE, assetUrl, getToken, setToken } from "../api";
 
 const ORG_ID = import.meta.env.VITE_ORG_ID as string;
 
