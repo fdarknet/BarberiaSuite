@@ -10,6 +10,7 @@ import { prisma } from "./prisma.js";
 import "./queue.js";
 
 const app = express();
+app.set("etag", false);
 
 // uploads dir (logo/fotos/QR)
 const uploadsDir = path.resolve("uploads");
@@ -22,6 +23,10 @@ app.use(morgan("dev"));
 
 app.use("/uploads", express.static(uploadsDir));
 
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 app.use("/api", router);
 
 app.get("/", (_req, res) => res.send("Barbería API OK"));
