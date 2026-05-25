@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, API_BASE, getToken, setToken } from "../api";
+import { api, API_BASE, assetUrl, getToken, setToken } from "../api";
 import { Link } from "react-router-dom";
 
 type Tab = "agenda" | "sucursales" | "servicios" | "barberos" | "horarios" | "caja" | "pagos" | "cola" | "fidelizacion" | "ajustes" | "comisiones";
