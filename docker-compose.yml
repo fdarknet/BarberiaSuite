@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: barberia_postgres
+    environment:
+      POSTGRES_USER: barberia
+      POSTGRES_PASSWORD: barberia
+      POSTGRES_DB: barberia
+    ports:
+      - "5432:5432"
+    volumes:
+      - barberia_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barberia -d barberia"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    container_name: barberia_redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - barberia_redisdata:/data
+
+volumes:
+  barberia_pgdata:
+  barberia_redisdata:
