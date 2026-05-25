@@ -2,6 +2,111 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bc-black: #050505;
+  --bc-ink: #0c0b0a;
+  --bc-panel: #14110f;
+  --bc-panel-soft: #1d1915;
+  --bc-gold: #f2cf5b;
+  --bc-gold-deep: #d1a751;
+  --bc-champagne: #efc6b2;
+  --bc-cream: #fff8ed;
+  --bc-muted: #cdbfaa;
+  --bc-line: rgba(239, 198, 178, 0.28);
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(239, 198, 178, 0.1), transparent 30rem),
+    var(--bc-black);
+  color: var(--bc-cream);
+}
+
+a {
+  color: inherit;
+}
+
+.bg-slate-50 {
+  background:
+    radial-gradient(circle at top left, rgba(242, 207, 91, 0.08), transparent 28rem),
+    var(--bc-black) !important;
+}
+
+.bg-white {
+  background-color: var(--bc-panel) !important;
+}
+
+.bg-slate-100 {
+  background-color: var(--bc-panel-soft) !important;
+}
+
+.bg-slate-900 {
+  background-color: var(--bc-gold) !important;
+}
+
+.border,
+.border-b {
+  border-color: var(--bc-line) !important;
+}
+
+.text-slate-900 {
+  color: var(--bc-cream) !important;
+}
+
+.text-slate-700,
+.text-slate-600,
+.text-slate-500 {
+  color: var(--bc-muted) !important;
+}
+
+.text-red-600 {
+  color: #ff9b8b !important;
+}
+
+.bg-slate-900.text-white,
+button.bg-slate-900,
+a.bg-slate-900 {
+  color: var(--bc-black) !important;
+}
+
+.ring-slate-900 {
+  --tw-ring-color: var(--bc-gold) !important;
+}
+
+input,
+select,
+textarea {
+  background-color: rgba(255, 248, 237, 0.04) !important;
+  border-color: var(--bc-line) !important;
+  color: var(--bc-cream) !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgba(205, 191, 170, 0.68) !important;
+}
+
+select option {
+  background-color: var(--bc-ink);
+  color: var(--bc-cream);
+}
+
+button,
+a {
+  transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+  transition-duration: 160ms;
+}
+
+button.border:hover,
+a.border:hover {
+  border-color: rgba(242, 207, 91, 0.75) !important;
+  box-shadow: 0 12px 30px rgba(242, 207, 91, 0.08);
+}
+
+button:disabled {
+  opacity: 0.46;
+}
+
 @keyframes homeFadeIn {
   from {
     opacity: 0;
