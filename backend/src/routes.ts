@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import Jimp from "jimp";
@@ -10,8 +11,16 @@ import { signToken, authRequired, requireRole } from "./auth.js";
 import { getAvailableSlots } from "./availability.js";
 import { notifQueue } from "./queue.js";
 import { addMinutes } from "./time.js";
+import { sendEmail } from "./notifications.js";
 
 export const router = Router();
+
+const passwordResetCodes = new Map<string, { codeHash: string; expiresAt: number }>();
+const PASSWORD_RESET_TTL_MS = 15 * 60 * 1000;
+
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
 
 // Uploads (logo / fotos / QR)
 const uploadsDir = path.resolve("uploads");
@@ -252,6 +261,76 @@ router.post("/auth/login", async (req, res) => {
       fullName: user.customer?.fullName ?? user.staff?.displayName ?? user.email,
     },
   });
+});
+
+router.post("/auth/password/change", async (req, res) => {
+  const schema = z.object({
+    email: z.string().email(),
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(6),
+  });
+  const body = schema.parse(req.body);
+  const email = normalizeEmail(body.email);
+
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) return res.status(401).json({ error: "Credenciales inválidas" });
+
+  const ok = await bcrypt.compare(body.currentPassword, user.passwordHash);
+  if (!ok) return res.status(401).json({ error: "Credenciales inválidas" });
+
+  const passwordHash = await bcrypt.hash(body.newPassword, 10);
+  await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+  res.json({ ok: true });
+});
+
+router.post("/auth/password/reset/request", async (req, res) => {
+  const schema = z.object({ email: z.string().email() });
+  const body = schema.parse(req.body);
+  const email = normalizeEmail(body.email);
+  const user = await prisma.user.findUnique({ where: { email } });
+
+  if (user) {
+    const code = crypto.randomInt(100000, 999999).toString();
+    const codeHash = await bcrypt.hash(code, 10);
+    passwordResetCodes.set(email, { codeHash, expiresAt: Date.now() + PASSWORD_RESET_TTL_MS });
+    await sendEmail(
+      email,
+      "Código para restablecer tu contraseña",
+      `Tu código para restablecer la contraseña es: ${code}\n\nEste código vence en 15 minutos.`
+    );
+  }
+
+  res.json({ ok: true });
+});
+
+router.post("/auth/password/reset/confirm", async (req, res) => {
+  const schema = z.object({
+    email: z.string().email(),
+    code: z.string().min(4),
+    newPassword: z.string().min(6),
+  });
+  const body = schema.parse(req.body);
+  const email = normalizeEmail(body.email);
+  const reset = passwordResetCodes.get(email);
+
+  if (!reset || reset.expiresAt < Date.now()) {
+    passwordResetCodes.delete(email);
+    return res.status(400).json({ error: "Código inválido o vencido" });
+  }
+
+  const ok = await bcrypt.compare(body.code.trim(), reset.codeHash);
+  if (!ok) return res.status(400).json({ error: "Código inválido o vencido" });
+
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) {
+    passwordResetCodes.delete(email);
+    return res.status(400).json({ error: "Código inválido o vencido" });
+  }
+
+  const passwordHash = await bcrypt.hash(body.newPassword, 10);
+  await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+  passwordResetCodes.delete(email);
+  res.json({ ok: true });
 });
 
 // Auth: who am I?

@@ -6,7 +6,7 @@ function hasSmtp() {
   return !!(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
 }
 
-async function sendEmail(to: string, subject: string, text: string) {
+export async function sendEmail(to: string, subject: string, text: string) {
   if (!hasSmtp()) {
     console.log("\n[EMAIL DEV] to:", to, "\nsubject:", subject, "\n", text, "\n");
     return;

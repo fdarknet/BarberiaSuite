@@ -23,10 +23,10 @@ export default function Booking() {
 
   // auth for customers (simple): if no token, show register/login block
   const [mode, setMode] = useState<"login"|"register">("login");
-  const [email, setEmail] = useState("cliente@local.com");
-  const [password, setPassword] = useState("cliente123");
-  const [fullName, setFullName] = useState("Cliente Demo");
-  const [phone, setPhone] = useState("+59170000000");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
   const [waOptIn, setWaOptIn] = useState(true);
   const [authErr, setAuthErr] = useState<string|null>(null);
 
@@ -245,9 +245,6 @@ useEffect(() => {
                 {mode === "login" ? "Entrar" : "Crear cuenta"}
               </button>
 
-              <div className="text-xs text-slate-500">
-                Demo cliente: <b>cliente@local / cliente123</b>
-              </div>
             </div>
           </>
         ) : (

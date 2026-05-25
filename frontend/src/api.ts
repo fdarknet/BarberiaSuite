@@ -102,6 +102,12 @@ export const api = {
 
   // Auth
   login: (email: string, password: string) => request<{ token: string; user: ApiUser }>("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  changePassword: (payload: { email: string; currentPassword: string; newPassword: string }) =>
+    request<{ ok: boolean }>("/auth/password/change", { method: "POST", body: JSON.stringify(payload) }),
+  requestPasswordReset: (email: string) =>
+    request<{ ok: boolean }>("/auth/password/reset/request", { method: "POST", body: JSON.stringify({ email }) }),
+  confirmPasswordReset: (payload: { email: string; code: string; newPassword: string }) =>
+    request<{ ok: boolean }>("/auth/password/reset/confirm", { method: "POST", body: JSON.stringify(payload) }),
   register: (payload: any) => request<{ token: string; user: ApiUser }>("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
   me: () => request<{ user: ApiUser }>("/auth/me"),
 
