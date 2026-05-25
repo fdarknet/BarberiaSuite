@@ -671,12 +671,18 @@ try {
                   </div>
 
                   <div className="flex flex-wrap gap-2 items-center">
-                    <input type="file" accept=".jpg,.jpeg,.png,.bmp,image/jpeg,image/png,image/bmp" className="text-xs" onChange={async e => {
+                    <input type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" className="text-xs" onChange={async e => {
                       const f = e.target.files?.[0];
                       if (!f) return;
-                      await api.adminUploadStaffPhoto(s.id, f);
-                      const st = await api.adminStaff();
-                      setStaff(st.staff);
+                      try {
+                        await api.adminUploadStaffPhoto(s.id, f);
+                        const st = await api.adminStaff();
+                        setStaff(st.staff);
+                      } catch (e:any) {
+                        alert(e.message || "No se pudo subir la foto");
+                      } finally {
+                        e.currentTarget.value = "";
+                      }
                     }} />
 
                     <button className="bg-slate-900 text-white rounded-xl px-4 py-2" onClick={async () => {
@@ -755,11 +761,17 @@ try {
           <div className="border rounded-2xl p-4">
             <div className="font-semibold">Logo de la barbería</div>
             <div className="mt-2 flex gap-2 items-center">
-              <input type="file" accept=".jpg,.jpeg,.png,.bmp,image/jpeg,image/png,image/bmp" onChange={async e => {
+              <input type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" onChange={async e => {
                 const f = e.target.files?.[0];
                 if (!f) return;
-                await api.adminUploadOrgLogo(f);
-                await loadOrg();
+                try {
+                  await api.adminUploadOrgLogo(f);
+                  await loadOrg();
+                } catch (e:any) {
+                  alert(e.message || "No se pudo subir el logo");
+                } finally {
+                  e.currentTarget.value = "";
+                }
               }} />
               {org?.logoUrl && <a className="underline text-sm" href={`${API_BASE}${org.logoUrl}`} target="_blank">Ver</a>}
             </div>
@@ -768,7 +780,7 @@ try {
 <div className="border rounded-2xl p-4 space-y-4">
   <div>
     <div className="font-semibold">Portada de la App</div>
-    <p className="text-sm text-slate-600 mt-1">Sube imágenes (JPG/JPEG o BMP), elige una como portada y define si se muestra el logo, el nombre, ambos o ninguno.</p>
+    <p className="text-sm text-slate-600 mt-1">Sube imágenes (JPG, JPEG, PNG, BMP o WEBP), elige una como portada y define si se muestra el logo, el nombre, ambos o ninguno.</p>
   </div>
 
   <div className="grid md:grid-cols-2 gap-3">

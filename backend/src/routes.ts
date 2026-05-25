@@ -37,13 +37,13 @@ const upload = multer({
   limits: { fileSize: 3 * 1024 * 1024 },
 });
 
-const ALLOWED_IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".bmp"]);
+const ALLOWED_IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".bmp", ".webp"]);
 function ensureAllowedImage(file: Express.Multer.File | undefined) {
   if (!file) return { ok: false as const, error: "Missing file" };
   const ext = path.extname(file.originalname || file.filename || "").toLowerCase();
   if (!ALLOWED_IMAGE_EXT.has(ext)) {
     try { fs.unlinkSync(file.path); } catch {}
-    return { ok: false as const, error: "Invalid image format. Use JPG/JPEG, PNG or BMP." };
+    return { ok: false as const, error: "Formato inválido. Usa JPG, JPEG, PNG, BMP o WEBP." };
   }
   return { ok: true as const };
 }
@@ -104,6 +104,25 @@ async function processAndReplaceOrgImage(orgId: string, file: Express.Multer.Fil
   };
 }
 
+async function processAndReplaceBrandingImage(orgId: string, file: Express.Multer.File, prefix: string) {
+  const dir = getOrgUploadDir(orgId, "branding");
+  const stem = path.parse(file.filename).name;
+  const filename = `${prefix}-${stem}.jpg`;
+  const fullPath = path.join(dir, filename);
+
+  const img = await Jimp.read(file.path);
+  const maxSide = Math.max(img.bitmap.width, img.bitmap.height);
+  if (maxSide > IMAGE_MAX_DIM) {
+    if (img.bitmap.width >= img.bitmap.height) img.resize(IMAGE_MAX_DIM, Jimp.AUTO);
+    else img.resize(Jimp.AUTO, IMAGE_MAX_DIM);
+  }
+  img.quality(JPG_QUALITY);
+  await img.writeAsync(fullPath);
+
+  try { fs.unlinkSync(file.path); } catch {}
+  return `/uploads/org_${orgId}/branding/${filename}`;
+}
+
 
 function getOrgUploadDir(orgId: string, sub: string) {
   const dir = path.join(uploadsDir, `org_${orgId}`, sub);
@@ -124,7 +143,7 @@ const uploadOrgLogo = multer({
       cb(null, safe + ext);
     },
   }),
-  limits: { fileSize: 3 * 1024 * 1024 },
+  limits: { fileSize: 8 * 1024 * 1024 },
 });
 
 const uploadOrgImage = multer({
@@ -643,7 +662,7 @@ router.post("/admin/org/logo", authRequired, requireRole("ADMIN"), uploadOrgLogo
   if (!req.file) return res.status(400).json({ error: "Missing file" });
   const chk = ensureAllowedImage(req.file);
   if (!chk.ok) return res.status(400).json({ error: chk.error });
-  const fileUrl = `/uploads/org_${u.orgId}/branding/${req.file.filename}`;
+  const fileUrl = await processAndReplaceBrandingImage(u.orgId, req.file, "logo");
   const updated = await prisma.organization.update({ where: { id: u.orgId }, data: { logoUrl: fileUrl } });
   res.json({ logoUrl: updated.logoUrl });
 });
@@ -1017,7 +1036,7 @@ router.post("/admin/staff/:id/photo", authRequired, requireRole("ADMIN"), upload
   if (!req.file) return res.status(400).json({ error: "Missing file" });
   const chk = ensureAllowedImage(req.file);
   if (!chk.ok) return res.status(400).json({ error: chk.error });
-  const fileUrl = `/uploads/org_${u.orgId}/branding/${req.file.filename}`;
+  const fileUrl = await processAndReplaceBrandingImage(u.orgId, req.file, "staff");
   const staff = await prisma.staffProfile.update({ where: { id }, data: { photoUrl: fileUrl } });
   res.json({ photoUrl: staff.photoUrl });
 });
