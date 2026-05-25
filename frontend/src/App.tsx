@@ -38,7 +38,7 @@ export default function App() {
                   Salir
                 </button>
               ) : (
-                <Link to="/login" className="px-3 py-1 rounded bg-slate-900 text-white">Entrar</Link>
+                <Link to="/login" className="px-3 py-1 rounded bg-slate-900 text-white"></Link>
               )}
             </nav>
           </div>
