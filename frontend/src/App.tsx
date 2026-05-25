@@ -28,8 +28,8 @@ export default function App() {
           <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
             <Link to="/" className="font-semibold">Camarguinho Barber Club</Link>
             <nav className="flex gap-3 text-sm">
-              <Link to="/reservar" className="hover:underline"></Link>
-              <Link to="/admin" className="hover:underline"></Link>
+              ##<Link to="/reservar" className="hover:underline"></Link>
+              ##<Link to="/admin" className="hover:underline"></Link>
               {isAuthed ? (
                 <button
                   className="px-3 py-1 rounded bg-slate-900 text-white"
