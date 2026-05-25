@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-a { @apply text-slate-900; }
-
 @keyframes homeFadeIn {
   from {
     opacity: 0;
