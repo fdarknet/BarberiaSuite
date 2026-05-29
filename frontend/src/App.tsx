@@ -1,16 +1,22 @@
 import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { getToken, setToken } from "./api";
+import { api, assetUrl, getToken, setToken } from "./api";
 import Home from "./pages/Home";
 import Booking from "./pages/Booking";
 import Kiosk from "./pages/Kiosk";
 import Login from "./pages/Login";
 import Admin from "./pages/Admin";
 
+const ORG_ID = import.meta.env.VITE_ORG_ID as string;
+
 export default function App() {
   const nav = useNavigate();
   const location = useLocation();
   const [token, setTokState] = useState<string | null>(getToken());
+  const [brand, setBrand] = useState<{ name: string; logoUrl: string | null }>({
+    name: "Camarguinho Barber Club",
+    logoUrl: null,
+  });
 
   useEffect(() => {
     const h = () => setTokState(getToken());
@@ -18,29 +24,51 @@ export default function App() {
     return () => window.removeEventListener("storage", h);
   }, []);
 
+  useEffect(() => {
+    if (!ORG_ID) return;
+    api.orgPublic(ORG_ID)
+      .then((r) => {
+        const companyName = r.org.company?.displayName;
+        setBrand({
+          name: companyName || r.org.name || "Camarguinho Barber Club",
+          logoUrl: r.org.logoUrl ?? null,
+        });
+      })
+      .catch(() => {});
+  }, []);
+
   const isAuthed = useMemo(() => !!token, [token]);
   const isHome = location.pathname === "/";
+  const isBooking = location.pathname === "/reservar";
+  const headerLogo = brand.logoUrl ? assetUrl(brand.logoUrl) : "/bc-logo.png";
 
   return (
     <div className={isHome ? "min-h-screen bg-[#050505]" : "min-h-screen"}>
       {!isHome && (
         <header className="bg-white border-b">
           <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-            <Link to="/" className="font-semibold">Camarguinho Barber Club</Link>
-            <nav className="flex gap-3 text-sm">
-              <Link to="/reservar" className="hover:underline">Reservar</Link>
-              <Link to="/admin" className="hover:underline">Admin</Link>
-              {isAuthed ? (
-                <button
-                  className="px-3 py-1 rounded bg-slate-900 text-white"
-                  onClick={() => { setToken(null); setTokState(null); nav("/"); }}
-                >
-                  Salir
-                </button>
-              ) : (
-                <Link to="/login" className="px-3 py-1 rounded bg-slate-900 text-white">Entrar</Link>
-              )}
-            </nav>
+            <Link to="/" className="flex min-w-0 items-center gap-3 font-semibold">
+              <span className="flex h-10 w-10 shrink-0 overflow-hidden rounded-full border bg-slate-100">
+                <img src={headerLogo} alt="" className="h-full w-full object-cover" />
+              </span>
+              <span className="truncate">{brand.name}</span>
+            </Link>
+            {!isBooking && (
+              <nav className="flex gap-3 text-sm">
+                <Link to="/reservar" className="hover:underline">Reservar</Link>
+                <Link to="/admin" className="hover:underline">Admin</Link>
+                {isAuthed ? (
+                  <button
+                    className="px-3 py-1 rounded bg-slate-900 text-white"
+                    onClick={() => { setToken(null); setTokState(null); nav("/"); }}
+                  >
+                    Salir
+                  </button>
+                ) : (
+                  <Link to="/login" className="px-3 py-1 rounded bg-slate-900 text-white">Entrar</Link>
+                )}
+              </nav>
+            )}
           </div>
         </header>
       )}
