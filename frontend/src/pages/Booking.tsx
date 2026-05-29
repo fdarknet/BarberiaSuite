@@ -139,25 +139,22 @@ useEffect(() => {
     <button
       type="button"
       onClick={() => setStaffId("")}
-      className={`border rounded-2xl p-3 text-left ${staffId === "" ? "ring-2 ring-slate-900" : ""}`}
+      className={`border rounded-2xl p-3 text-center ${staffId === "" ? "ring-2 ring-slate-900" : ""}`}
     >
-      <div className="font-semibold">Cualquiera</div>
-      <div className="text-xs text-slate-600">Te asignamos uno disponible</div>
+      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-sm font-bold">BC</div>
+      <div className="mt-2 font-semibold">Cualquiera</div>
     </button>
     {staff.map(s => (
       <button
         key={s.id}
         type="button"
         onClick={() => setStaffId(s.id)}
-        className={`border rounded-2xl p-3 flex gap-3 items-center ${staffId === s.id ? "ring-2 ring-slate-900" : ""}`}
+        className={`border rounded-2xl p-3 text-center ${staffId === s.id ? "ring-2 ring-slate-900" : ""}`}
       >
-        <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden flex items-center justify-center">
-          {s.photoUrl ? <img src={assetUrl(s.photoUrl)} className="w-full h-full object-cover" /> : <span className="text-xs text-slate-500">👤</span>}
+        <div className="mx-auto h-20 w-20 overflow-hidden rounded-full bg-slate-100 flex items-center justify-center">
+          {s.photoUrl ? <img src={assetUrl(s.photoUrl)} className="w-full h-full object-cover" /> : <span className="text-xl font-bold">{String(s.name ?? "?").slice(0, 1)}</span>}
         </div>
-        <div>
-          <div className="font-semibold">{s.name}</div>
-          <div className="text-xs text-slate-600">{s.commissionPct}% comisión</div>
-        </div>
+        <div className="mt-2 font-semibold">{s.name}</div>
       </button>
     ))}
   </div>
