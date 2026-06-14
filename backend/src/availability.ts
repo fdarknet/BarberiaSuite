@@ -1,5 +1,5 @@
 import { prisma } from "./prisma.js";
-import { addMinutes, overlaps, setDateTime, weekday0Sunday } from "./time.js";
+import { addDaysISO, addMinutes, overlaps, setDateTimeInZone, weekdayFromISODate } from "./time.js";
 
 type Slot = { startAt: string; endAt: string; staffId?: string };
 
@@ -17,10 +17,8 @@ export async function getAvailableSlots(params: {
   const service = await prisma.service.findUnique({ where: { id: serviceId } });
   if (!service) throw new Error("Service not found");
 
-  const date = new Date(dateISO + "T00:00:00");
-  if (isNaN(date.getTime())) throw new Error("Invalid date");
-
-  const weekday = weekday0Sunday(date);
+  const timezone = branch.timezone || "America/La_Paz";
+  const weekday = weekdayFromISODate(dateISO);
 
   // Staff who can do the service and belong to this branch
   const staffList = await prisma.staffProfile.findMany({
@@ -42,8 +40,8 @@ export async function getAvailableSlots(params: {
   });
 
   // Appointments for that day for relevant staff
-  const dayStart = new Date(date); dayStart.setHours(0,0,0,0);
-  const dayEnd = new Date(date); dayEnd.setHours(23,59,59,999);
+  const dayStart = setDateTimeInZone(dateISO, "00:00", timezone);
+  const dayEnd = new Date(setDateTimeInZone(addDaysISO(dateISO, 1), "00:00", timezone).getTime() - 1);
 
   const appts = await prisma.appointment.findMany({
     where: {
@@ -67,14 +65,17 @@ export async function getAvailableSlots(params: {
     const avail = avails.find(a => a.staffId === staffId);
     if (!avail) return false;
 
-    const availStart = setDateTime(date, avail.startTime);
-    const availEnd = setDateTime(date, avail.endTime);
+    const availStart = setDateTimeInZone(dateISO, avail.startTime, timezone);
+    const availEnd = setDateTimeInZone(dateISO, avail.endTime, timezone);
     if (!(start >= availStart && end <= availEnd)) return false;
 
     const breaks = (avail.breaks as any[]) || [];
     for (const br of breaks) {
-      const bS = setDateTime(date, br.start);
-      const bE = setDateTime(date, br.end);
+      const breakStart = br.start ?? br.startTime;
+      const breakEnd = br.end ?? br.endTime;
+      if (!breakStart || !breakEnd) continue;
+      const bS = setDateTimeInZone(dateISO, breakStart, timezone);
+      const bE = setDateTimeInZone(dateISO, breakEnd, timezone);
       if (overlaps(start, end, bS, bE)) return false;
     }
     return true;
@@ -85,8 +86,8 @@ export async function getAvailableSlots(params: {
     const avail = avails.find(a => a.staffId === s.id);
     if (!avail) continue;
 
-    let cursor = setDateTime(date, avail.startTime);
-    const endBoundary = setDateTime(date, avail.endTime);
+    let cursor = setDateTimeInZone(dateISO, avail.startTime, timezone);
+    const endBoundary = setDateTimeInZone(dateISO, avail.endTime, timezone);
 
     while (addMinutes(cursor, duration) <= endBoundary) {
       const start = cursor;

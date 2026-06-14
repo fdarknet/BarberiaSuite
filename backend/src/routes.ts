@@ -1090,12 +1090,26 @@ router.get("/admin/staff/:id/availability", authRequired, requireRole("ADMIN"), 
 
 router.put("/admin/staff/:id/availability", authRequired, requireRole("ADMIN"), async (req, res) => {
   const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const timeBreakSchema = z.object({
+    start: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    end: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+    endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  }).transform((br, ctx) => {
+    const start = br.start ?? br.startTime;
+    const end = br.end ?? br.endTime;
+    if (!start || !end) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Break start/end required" });
+      return z.NEVER;
+    }
+    return { start, end };
+  });
   const schema = z.object({
     days: z.array(z.object({
       weekday: z.coerce.number().int().min(0).max(6),
       startTime: z.string().regex(/^\d{2}:\d{2}$/),
       endTime: z.string().regex(/^\d{2}:\d{2}$/),
-      breaks: z.array(z.object({ start: z.string().regex(/^\d{2}:\d{2}$/), end: z.string().regex(/^\d{2}:\d{2}$/) })).default([]),
+      breaks: z.array(timeBreakSchema).default([]),
     })),
   });
   const body = schema.parse(req.body);

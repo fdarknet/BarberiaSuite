@@ -1752,7 +1752,15 @@ function AvailabilityEditor({ staffId, staff, onPickStaff }: { staffId: string; 
       const map = new Map(r.availability.map((a: any) => [a.weekday, a]));
       setDays(prev => prev.map(d => {
         const x = map.get(d.weekday);
-        return x ? { weekday: x.weekday, startTime: x.startTime, endTime: x.endTime, breaks: x.breaks ?? [] } : d;
+        return x ? {
+          weekday: x.weekday,
+          startTime: x.startTime,
+          endTime: x.endTime,
+          breaks: (x.breaks ?? []).map((br: any) => ({
+            startTime: br.startTime ?? br.start ?? "12:00",
+            endTime: br.endTime ?? br.end ?? "13:00",
+          })),
+        } : d;
       }));
     }).catch(() => {});
   }, [staffId]);
@@ -1821,11 +1829,16 @@ function AvailabilityEditor({ staffId, staff, onPickStaff }: { staffId: string; 
 
       <div className="mt-5">
         <button className="bg-slate-900 text-white rounded-xl px-4 py-2" onClick={async () => {
-          await api.adminSetAvailability(staffId, days);
+          await api.adminSetAvailability(staffId, days.map((day: any) => ({
+            ...day,
+            breaks: (day.breaks ?? []).map((br: any) => ({
+              start: br.start ?? br.startTime,
+              end: br.end ?? br.endTime,
+            })),
+          })));
           alert("✅ Horarios guardados");
         }}>Guardar horarios</button>
       </div>
     </div>
   );
 }
-

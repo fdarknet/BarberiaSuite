@@ -11,6 +11,56 @@ export function setDateTime(date: Date, hhmm: string): Date {
   return d;
 }
 
+export function parseISODate(dateISO: string): { y: number; m: number; d: number } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateISO);
+  if (!match) throw new Error(`Invalid date: ${dateISO}`);
+  return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) };
+}
+
+export function addDaysISO(dateISO: string, days: number): string {
+  const { y, m, d } = parseISODate(dateISO);
+  const date = new Date(Date.UTC(y, m - 1, d + days, 12, 0, 0, 0));
+  return date.toISOString().slice(0, 10);
+}
+
+export function weekdayFromISODate(dateISO: string): number {
+  const { y, m, d } = parseISODate(dateISO);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0, 0)).getUTCDay();
+}
+
+function timeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const asUTC = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  );
+  return asUTC - date.getTime();
+}
+
+export function setDateTimeInZone(dateISO: string, hhmm: string, timeZone: string): Date {
+  const { y, m, d } = parseISODate(dateISO);
+  const { h, m: minute } = parseHHMM(hhmm);
+  const utcGuess = new Date(Date.UTC(y, m - 1, d, h, minute, 0, 0));
+  const first = new Date(utcGuess.getTime() - timeZoneOffsetMs(utcGuess, timeZone));
+  const second = new Date(utcGuess.getTime() - timeZoneOffsetMs(first, timeZone));
+  return second;
+}
+
 export function addMinutes(d: Date, minutes: number): Date {
   return new Date(d.getTime() + minutes * 60_000);
 }
