@@ -20,6 +20,8 @@ export default function Booking() {
   const [slots, setSlots] = useState<{ startAt: string; endAt: string }[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
 
   // auth for customers (simple): if no token, show register/login block
   const [mode, setMode] = useState<"login"|"register">("login");
@@ -32,6 +34,11 @@ export default function Booking() {
 
   const authed = useMemo(() => !!getToken(), []);
   const [me, setMe] = useState<any>(null);
+  const today = isoDateLocal();
+  const visibleSlots = useMemo(
+    () => slots.filter((slot) => new Date(slot.startAt).getTime() >= nowTick),
+    [slots, nowTick]
+  );
 
   useEffect(() => {
     if (getToken()) {
@@ -41,10 +48,18 @@ export default function Booking() {
       console.warn("Missing VITE_ORG_ID in frontend/.env");
       return;
     }
+    api.orgPublic(ORG_ID)
+      .then(r => setOrgLogoUrl(r.org.logoUrl ?? null))
+      .catch(() => {});
     api.branches(ORG_ID).then(r => {
       setBranches(r.branches);
       if (r.branches[0]) setBranchId(r.branches[0].id);
     });
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 30 * 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -74,6 +89,12 @@ useEffect(() => {
   }
 
   useEffect(() => { loadSlots(); }, [branchId, serviceId, date, staffId]);
+
+  useEffect(() => {
+    if (selected && new Date(selected).getTime() < nowTick) {
+      setSelected("");
+    }
+  }, [selected, nowTick]);
 
   async function doAuth() {
     setAuthErr(null);
@@ -141,7 +162,9 @@ useEffect(() => {
       onClick={() => setStaffId("")}
       className={`border rounded-2xl p-3 text-center ${staffId === "" ? "ring-2 ring-slate-900" : ""}`}
     >
-      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-sm font-bold">BC</div>
+      <div className="mx-auto flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-slate-100">
+        <img src={orgLogoUrl ? assetUrl(orgLogoUrl) : "/bc-logo.png"} alt="" className="h-full w-full object-cover" />
+      </div>
       <div className="mt-2 font-semibold">Cualquiera</div>
     </button>
     {staff.map(s => (
@@ -163,7 +186,7 @@ useEffect(() => {
 
           <div>
             <label className="text-sm">Fecha</label>
-            <input className="w-full border rounded-xl px-3 py-2" type="date" value={date} onChange={e=>setDate(e.target.value)} />
+            <input className="w-full border rounded-xl px-3 py-2" type="date" min={today} value={date} onChange={e=>setDate(e.target.value)} />
           </div>
         </div>
 
@@ -171,11 +194,11 @@ useEffect(() => {
           <div className="text-sm font-semibold mb-2">Horarios</div>
           {loadingSlots ? (
             <div className="text-sm text-slate-600">Cargando...</div>
-          ) : slots.length === 0 ? (
+          ) : visibleSlots.length === 0 ? (
             <div className="text-sm text-slate-600">No hay horarios disponibles para esa fecha.</div>
           ) : (
             <div className="grid grid-cols-2 gap-2">
-              {slots.slice(0, 24).map(s => (
+              {visibleSlots.slice(0, 24).map(s => (
                 <button
                   key={s.startAt}
                   className={"border rounded-xl px-3 py-2 text-sm " + (selected === s.startAt ? "bg-slate-900 text-white" : "bg-white")}
@@ -186,7 +209,7 @@ useEffect(() => {
               ))}
             </div>
           )}
-          {slots.length > 24 && <div className="text-xs text-slate-500 mt-2">Mostrando primeros 24 horarios (MVP).</div>}
+          {visibleSlots.length > 24 && <div className="text-xs text-slate-500 mt-2">Mostrando primeros 24 horarios (MVP).</div>}
         </div>
 
         <div className="mt-5">

@@ -56,6 +56,7 @@ export async function getAvailableSlots(params: {
 
   const duration = service.durationMin;
   const step = 15; // minutos
+  const now = new Date();
   const out: Slot[] = [];
 
   // helper: staff has free slot?
@@ -90,7 +91,7 @@ export async function getAvailableSlots(params: {
     while (addMinutes(cursor, duration) <= endBoundary) {
       const start = cursor;
       const end = addMinutes(cursor, duration);
-      if (staffFree(s.id, start, end)) {
+      if (start >= now && staffFree(s.id, start, end)) {
         out.push({
           startAt: start.toISOString(),
           endAt: end.toISOString(),

@@ -16,12 +16,16 @@ function getQS(key: string) {
 function statusStyle(status: string) {
   switch (status) {
     case "CALLED":
-      return { card: "border-sky-300 bg-sky-50", badge: "bg-sky-600 text-white", label: "Llamando" };
+      return { card: "queue-ticket-card--called", badge: "queue-status-badge--called", label: "LLAMANDO" };
     case "IN_CHAIR":
-      return { card: "border-emerald-300 bg-emerald-50", badge: "bg-emerald-600 text-white", label: "En silla" };
+      return { card: "queue-ticket-card--chair", badge: "queue-status-badge--chair", label: "EN SILLA" };
+    case "DONE":
+      return { card: "queue-ticket-card--done", badge: "queue-status-badge--done", label: "TERMINADO" };
+    case "CANCELED":
+      return { card: "queue-ticket-card--canceled", badge: "queue-status-badge--canceled", label: "CANCELADO" };
     case "WAITING":
     default:
-      return { card: "border-amber-300 bg-amber-50", badge: "bg-amber-600 text-white", label: "En espera" };
+      return { card: "queue-ticket-card--waiting", badge: "queue-status-badge--waiting", label: "EN ESPERA" };
   }
 }
 
@@ -399,7 +403,7 @@ export default function Kiosk() {
             </div>
 
             <div className="mt-7">
-              <h2 className="text-3xl font-extrabold">Sacar turno (walk-in)</h2>
+              <h2 className="text-3xl font-extrabold">Sacar turno</h2>
               <div className="mt-4 flex flex-col md:flex-row gap-3">
                 <input className="flex-1 border rounded-2xl p-4 text-2xl" placeholder="Tu nombre" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
                 <button className="bg-slate-900 text-white rounded-2xl px-8 py-4 text-2xl font-extrabold" onClick={takeTicket}>
@@ -440,9 +444,9 @@ export default function Kiosk() {
         </div>
 
         <div className="mt-5 grid lg:grid-cols-4 gap-4">
-          <QueueSection title="Llamando"  items={called}   bodyRef={calledRef} />
-          <QueueSection title="En silla"  items={inChair}  bodyRef={chairRef} />
-          <QueueSection title="En espera" items={waiting}  bodyRef={waitingRef} />
+          <QueueSection title="LLAMANDO"  items={called}   bodyRef={calledRef} />
+          <QueueSection title="EN SILLA"  items={inChair}  bodyRef={chairRef} />
+          <QueueSection title="EN ESPERA" items={waiting}  bodyRef={waitingRef} />
           <PaidSection  paidAppointments={paidAppointments} bodyRef={paidRef} />
         </div>
       </div>
@@ -487,15 +491,15 @@ export default function Kiosk() {
 
 function QueueSection({ title, items, bodyRef }: { title: string; items: any[]; bodyRef: React.RefObject<HTMLDivElement> }) {
   const headerStyle =
-    title === "Llamando"
-      ? "bg-sky-600 text-white"
-      : title === "En silla"
-      ? "bg-emerald-600 text-white"
-      : "bg-amber-600 text-white";
+    title === "LLAMANDO"
+      ? "queue-column__header--called"
+      : title === "EN SILLA"
+      ? "queue-column__header--chair"
+      : "queue-column__header--waiting";
 
   return (
-    <div className="border rounded-2xl overflow-hidden">
-      <div className={`p-4 text-2xl font-extrabold ${headerStyle}`}>{title}</div>
+    <div className="queue-column">
+      <div className={`queue-column__header p-4 text-2xl font-extrabold ${headerStyle}`}>{title}</div>
 
       <div ref={bodyRef} className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
         {items.map((t) => {
@@ -503,16 +507,16 @@ function QueueSection({ title, items, bodyRef }: { title: string; items: any[]; 
           // Reservas pagadas: borde violeta + badge especial
           const isAppt = !!t.fromAppointment;
           const cardCls = isAppt
-            ? "border-2 border-violet-400 bg-violet-50 shadow-md"
-            : `border ${st.card}`;
+            ? "queue-ticket-card queue-ticket-card--reserved"
+            : `queue-ticket-card ${st.card}`;
 
           return (
             <div key={t.id} className={`rounded-2xl p-4 flex items-center justify-between ${cardCls}`}>
               <div>
                 <div className="flex items-center gap-2">
-                  <div className="text-5xl font-extrabold">#{t.n}</div>
+                  <div className="queue-ticket-number text-5xl font-extrabold">#{t.n}</div>
                   {isAppt && (
-                    <span className="text-xs px-2 py-1 rounded-full bg-violet-600 text-white font-bold leading-none">
+                    <span className="queue-status-badge queue-status-badge--reserved text-xs px-2 py-1 font-bold leading-none">
                       RESERVA
                     </span>
                   )}
@@ -528,7 +532,7 @@ function QueueSection({ title, items, bodyRef }: { title: string; items: any[]; 
                   </div>
                 )}
               </div>
-              <span className={`text-base px-4 py-2 rounded-full font-extrabold ${isAppt ? "bg-violet-600 text-white" : st.badge}`}>
+              <span className={`queue-status-badge text-base px-4 py-2 font-extrabold ${isAppt ? "queue-status-badge--reserved" : st.badge}`}>
                 {st.label}
               </span>
             </div>
@@ -557,8 +561,8 @@ function PaidSection({
   bodyRef: React.RefObject<HTMLDivElement>;
 }) {
   return (
-    <div className="border rounded-2xl overflow-hidden">
-      <div className="p-4 text-2xl font-extrabold bg-violet-600 text-white flex items-center gap-2">
+    <div className="queue-column">
+      <div className="queue-column__header queue-column__header--paid p-4 text-2xl font-extrabold flex items-center gap-2">
         <span>✅</span> Reservas Pagadas
       </div>
 
@@ -566,12 +570,12 @@ function PaidSection({
         {paidAppointments.map((a) => (
           <div
             key={a.id}
-            className="border-2 border-violet-300 bg-violet-50 rounded-2xl p-4 flex items-start justify-between gap-2"
+            className="queue-ticket-card queue-ticket-card--reserved rounded-2xl p-4 flex items-start justify-between gap-2"
           >
             <div className="flex-1 min-w-0">
               {/* Número de turno en cola (asignado 10 min antes) */}
               {a.ticketNumber != null ? (
-                <div className="text-5xl font-extrabold text-violet-700">#{a.ticketNumber}</div>
+                <div className="queue-ticket-number text-5xl font-extrabold">#{a.ticketNumber}</div>
               ) : (
                 <div className="text-2xl font-bold text-violet-400 italic">Turno pendiente</div>
               )}
@@ -601,7 +605,7 @@ function PaidSection({
               </div>
             </div>
 
-            <span className="shrink-0 text-sm px-3 py-2 rounded-full font-extrabold bg-violet-600 text-white">
+            <span className="queue-status-badge queue-status-badge--reserved shrink-0 text-sm px-3 py-2 font-extrabold">
               Pagado
             </span>
           </div>

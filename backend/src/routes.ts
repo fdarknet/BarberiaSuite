@@ -213,7 +213,15 @@ async function scheduleReminderJobs(appointmentId: string, startAt: Date) {
 
 
 
-router.get("/health", (_req, res) => res.json({ ok: true }));
+router.get("/health", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, db: "ok" });
+  } catch (error) {
+    console.error("[health] database check failed", error);
+    res.status(503).json({ ok: false, db: "error" });
+  }
+});
 
 // Auth
 router.post("/auth/register", async (req, res) => {

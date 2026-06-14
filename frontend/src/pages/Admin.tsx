@@ -10,6 +10,27 @@ function isoDateLocal(d = new Date()) {
   return x.toISOString().slice(0, 10);
 }
 
+const queueStatusLabels: Record<string, string> = {
+  WAITING: "EN ESPERA",
+  CALLED: "LLAMANDO",
+  IN_CHAIR: "EN SILLA",
+  DONE: "TERMINADO",
+  CANCELED: "CANCELADO",
+};
+
+const cashSessionStatusLabels: Record<string, string> = {
+  OPEN: "ABIERTA",
+  CLOSED: "CERRADA",
+};
+
+function queueStatusLabel(status: string) {
+  return queueStatusLabels[status] ?? status;
+}
+
+function cashSessionStatusLabel(status: string) {
+  return cashSessionStatusLabels[status] ?? status;
+}
+
 export default function Admin() {
   const token = getToken();
   const [tab, setTab] = useState<Tab>("agenda");
@@ -191,7 +212,7 @@ try {
     { id: "pagos", label: "Pagos" },
     { id: "caja", label: "Caja" },
     { id: "comisiones", label: "Comisiones" },
-    { id: "cola", label: "Cola / Walk-ins" },
+    { id: "cola", label: "Lista de Espera" },
     { id: "sucursales", label: "Sucursales" },
     { id: "servicios", label: "Servicios" },
     { id: "barberos", label: "Barberos" },
@@ -268,7 +289,7 @@ try {
       {tab === "cola" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
           <div>
-            <h2 className="text-xl font-bold">Cola / Walk-ins</h2>
+            <h2 className="text-xl font-bold">Lista de Espera</h2>
             <p className="text-sm text-slate-600 mt-1">Gestiona turnos sin reserva y pantalla "En espera".</p>
             <button className="mt-3 border rounded-xl px-3 py-2 text-sm" onClick={() => { loadQueue(); loadPaidToday(); }}>Refrescar</button>
           </div>
@@ -285,21 +306,21 @@ try {
               {paidToday.map((a: any) => {
                 const hasTicket = a.ticketNumber != null;
                 return (
-                  <div key={a.id} className="border-2 border-violet-300 bg-violet-50 rounded-2xl p-3 flex items-center justify-between gap-3">
+                  <div key={a.id} className="queue-admin-row queue-admin-row--reserved rounded-2xl p-3 flex items-center justify-between gap-3 !text-[#0c0b0a]" style={{ color: "#0c0b0a" }}>
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className={`text-2xl font-extrabold w-14 text-center shrink-0 ${hasTicket ? "text-violet-700" : "text-violet-300"}`}>
+                      <div className={`text-2xl font-extrabold w-14 text-center shrink-0 ${hasTicket ? "!text-[#111111]" : "!text-[#6d28d9]"}`}>
                         {hasTicket ? `#${a.ticketNumber}` : "—"}
                       </div>
                       <div className="min-w-0">
-                        <div className="font-bold truncate">{a.customerName}</div>
-                        <div className="text-xs text-slate-600 truncate">{a.serviceName} · {a.staffName}</div>
-                        <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                          {a.startAt && <span className="font-semibold text-violet-700">{new Date(a.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
-                          <span className="font-mono text-slate-400">Reserva #{a.appointmentId.slice(-6).toUpperCase()}</span>
+                        <div className="font-bold truncate !text-[#0c0b0a]">{a.customerName}</div>
+                        <div className="text-xs truncate !text-[#4b3f32]">{a.serviceName} · {a.staffName}</div>
+                        <div className="text-xs flex items-center gap-2 mt-0.5 !text-[#4b3f32]">
+                          {a.startAt && <span className="font-semibold !text-[#6d28d9]">{new Date(a.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
+                          <span className="font-mono !text-[#4b3f32]">Reserva #{a.appointmentId.slice(-6).toUpperCase()}</span>
                         </div>
                       </div>
                     </div>
-                    <span className={`shrink-0 text-xs px-3 py-1.5 rounded-full font-bold ${hasTicket ? "bg-violet-600 text-white" : "bg-violet-100 text-violet-700 border border-violet-300"}`}>
+                    <span className={`queue-status-badge shrink-0 text-xs px-3 py-1.5 font-bold !text-[#fff8ed] ${hasTicket ? "queue-status-badge--reserved" : "queue-status-badge--waiting"}`}>
                       {hasTicket ? "En cola" : "Pendiente turno"}
                     </span>
                   </div>
@@ -319,24 +340,24 @@ try {
               {queue.map((t: any) => {
                 const isAppt = !!t.fromAppointment;
                 return (
-                  <div key={t.id} className={`rounded-2xl p-3 flex items-center justify-between gap-3 ${isAppt ? "border-2 border-violet-400 bg-violet-50" : "border border-slate-200 bg-white"}`}>
+                  <div key={t.id} className={`queue-admin-row rounded-2xl p-3 flex items-center justify-between gap-3 !text-[#0c0b0a] ${isAppt ? "queue-admin-row--reserved" : ""}`} style={{ color: "#0c0b0a" }}>
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className={`text-2xl font-extrabold w-10 text-center shrink-0 ${isAppt ? "text-violet-700" : "text-slate-900"}`}>#{t.n}</div>
+                      <div className="text-2xl font-extrabold w-10 text-center shrink-0 !text-[#111111]">#{t.n}</div>
                       <div className="min-w-0">
-                        <div className="font-bold truncate flex items-center gap-1">
+                        <div className="font-bold truncate flex items-center gap-1 !text-[#0c0b0a]">
                           {t.name}
-                          {isAppt && <span className="text-xs bg-violet-600 text-white rounded-full px-1.5 py-0.5 font-bold">RESERVA</span>}
+                          {isAppt && <span className="queue-status-badge queue-status-badge--reserved text-xs px-1.5 py-0.5 font-bold !text-[#fff8ed]">RESERVA</span>}
                         </div>
-                        <div className="text-xs text-slate-600 truncate">{t.service} · {t.staff ?? "Sin barbero"}</div>
-                        {isAppt && t.scheduledAt && <div className="text-xs text-violet-700 font-semibold">{new Date(t.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>}
+                        <div className="text-xs truncate !text-[#4b3f32]">{t.service} · {t.staff ?? "Sin barbero"}</div>
+                        {isAppt && t.scheduledAt && <div className="text-xs font-semibold !text-[#6d28d9]">{new Date(t.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>}
                       </div>
                     </div>
-                    <select className="border rounded-xl p-2 text-sm shrink-0" value={t.status} onChange={async e => { await api.queueUpdateTicket(t.id, e.target.value); await loadQueue(); }}>
-                      <option value="WAITING">WAITING</option>
-                      <option value="CALLED">CALLED</option>
-                      <option value="IN_CHAIR">IN_CHAIR</option>
-                      <option value="DONE">DONE</option>
-                      <option value="CANCELED">CANCELED</option>
+                    <select className="border rounded-xl p-2 text-sm font-bold shrink-0 !bg-[#fffaf1] !text-[#0c0b0a]" value={t.status} onChange={async e => { await api.queueUpdateTicket(t.id, e.target.value); await loadQueue(); }}>
+                      <option value="WAITING">{queueStatusLabel("WAITING")}</option>
+                      <option value="CALLED">{queueStatusLabel("CALLED")}</option>
+                      <option value="IN_CHAIR">{queueStatusLabel("IN_CHAIR")}</option>
+                      <option value="DONE">{queueStatusLabel("DONE")}</option>
+                      <option value="CANCELED">{queueStatusLabel("CANCELED")}</option>
                     </select>
                   </div>
                 );
@@ -1293,7 +1314,7 @@ function CashProPanel({ branchId, branches, org }: { branchId: string; branches:
         ${showPhone && phone ? `<div class="sub">Tel: ${phone}</div>` : ``}
         ${showEmail && email ? `<div class="sub">${email}</div>` : ``}
         <div class="sub">${branchLine}</div>
-        <div class="sub">Sesión: <b>${report.session.id}</b> • Estado: <b>${report.session.status}</b></div>
+        <div class="sub">Sesión: <b>${report.session.id}</b> • Estado: <b>${cashSessionStatusLabel(report.session.status)}</b></div>
         <div class="sub">Abrió: <b>${new Date(report.session.openedAt).toLocaleString()}</b> ${report.session.closedAt ? `• Cerró: <b>${new Date(report.session.closedAt).toLocaleString()}</b>` : ""}</div>
       </div>
     </div>
@@ -1301,11 +1322,11 @@ function CashProPanel({ branchId, branches, org }: { branchId: string; branches:
     <div class="box">
       <div class="grid">
         <div class="kpi">Apertura efectivo: <b>${s.openingCash}</b></div>
-        <div class="kpi">Mov IN: <b>${s.movIn}</b> / Mov OUT: <b>${s.movOut}</b></div>
+        <div class="kpi">Entradas: <b>${s.movIn}</b> / Salidas: <b>${s.movOut}</b></div>
         <div class="kpi">Cash (pagos): <b>${s.cashFromPayments}</b> • QR (pagos): <b>${s.qrFromPayments}</b></div>
         <div class="kpi">Total ventas: <b>${s.totalSales}</b></div>
         <div class="kpi">Efectivo esperado: <b>${s.expectedCash}</b></div>
-        <div class="kpi">Efectivo contado: <b>${s.counted ?? ""}</b> • Diff: <b>${s.diff ?? ""}</b></div>
+        <div class="kpi">Efectivo contado: <b>${s.counted ?? ""}</b> • Diferencia: <b>${s.diff ?? ""}</b></div>
       </div>
     </div>
 
@@ -1395,11 +1416,11 @@ function printTicket() {
         <div class="row"><span>Total ventas</span><span class="big">${s.totalSales}</span></div>
         <div class="row"><span>QR</span><span>${s.qrFromPayments}</span></div>
         <div class="row"><span>Efectivo (pagos)</span><span>${s.cashFromPayments}</span></div>
-        <div class="row"><span>Mov IN</span><span>${s.movIn}</span></div>
-        <div class="row"><span>Mov OUT</span><span>${s.movOut}</span></div>
+        <div class="row"><span>Entradas</span><span>${s.movIn}</span></div>
+        <div class="row"><span>Salidas</span><span>${s.movOut}</span></div>
         <div class="row"><span>Esperado cash</span><span class="big">${s.expectedCash}</span></div>
         <div class="row"><span>Contado cash</span><span class="big">${s.counted ?? ""}</span></div>
-        <div class="row"><span>Diff</span><span class="big">${s.diff ?? ""}</span></div>
+        <div class="row"><span>Diferencia</span><span class="big">${s.diff ?? ""}</span></div>
         <div class="line"></div>
         <div class="footer center">
           <div>${wa ? `WhatsApp: ${wa}` : ""}</div>
@@ -1445,7 +1466,7 @@ async function addMovement() {
           <div className="mt-3 space-y-2 max-h-[420px] overflow-auto">
             {sessions.map((s: any) => (
               <button key={s.id} className={`w-full text-left border rounded-xl p-3 ${selected?.id===s.id ? "bg-slate-900 text-white" : ""}`} onClick={async ()=>{ setSelected(s); await loadReport(s.id); }}>
-                <div className="text-sm font-semibold">{new Date(s.openedAt).toLocaleString()} • {s.status}</div>
+                <div className="text-sm font-semibold">{new Date(s.openedAt).toLocaleString()} • {cashSessionStatusLabel(s.status)}</div>
                 <div className="text-xs">Cash: {s.summary.cashFromPayments} • QR: {s.summary.qrFromPayments} • Total: {s.summary.totalSales}</div>
               </button>
             ))}
@@ -1455,7 +1476,7 @@ async function addMovement() {
           <div className="mt-4 border-t pt-4">
             <div className="font-semibold">Apertura / Cierre</div>
             <div className="mt-2 flex flex-wrap gap-2 items-center">
-              <input type="number" className="border rounded-xl p-2 w-28" placeholder="Opening" value={openingCash} onChange={e=>setOpeningCash(Number(e.target.value))} />
+              <input type="number" className="border rounded-xl p-2 w-28" placeholder="Apertura" value={openingCash} onChange={e=>setOpeningCash(Number(e.target.value))} />
               <button className="bg-slate-900 text-white rounded-xl px-3 py-2" disabled={!!openSession} onClick={openCash}>Abrir</button>
               <input type="number" className="border rounded-xl p-2 w-28" placeholder="Contado" value={countedCash} onChange={e=>setCountedCash(Number(e.target.value))} />
               <button className="border rounded-xl px-3 py-2" disabled={!openSession} onClick={()=> openSession && closeCash(openSession.id)}>Cerrar</button>
@@ -1467,8 +1488,8 @@ async function addMovement() {
             <div className="font-semibold">Movimiento de caja</div>
             <div className="mt-2 flex flex-wrap gap-2 items-center">
               <select className="border rounded-xl p-2" value={movementType} onChange={e=>setMovementType(e.target.value as any)}>
-                <option value="IN">IN</option>
-                <option value="OUT">OUT</option>
+                <option value="IN">ENTRADA</option>
+                <option value="OUT">SALIDA</option>
               </select>
               <input type="number" className="border rounded-xl p-2 w-28" placeholder="Monto" value={movementAmount} onChange={e=>setMovementAmount(Number(e.target.value))} />
               <input className="border rounded-xl p-2 flex-1 min-w-[180px]" placeholder="Motivo" value={movementReason} onChange={e=>setMovementReason(e.target.value)} />
@@ -1486,12 +1507,12 @@ async function addMovement() {
           {report && (
             <div className="mt-3 space-y-2">
               <div className="text-sm">Sucursal: <b>{report.session.branch.name}</b></div>
-              <div className="text-sm">Estado: <b>{report.session.status}</b></div>
-              <div className="text-sm">Opening cash: <b>{report.summary.openingCash}</b></div>
+              <div className="text-sm">Estado: <b>{cashSessionStatusLabel(report.session.status)}</b></div>
+              <div className="text-sm">Apertura efectivo: <b>{report.summary.openingCash}</b></div>
               <div className="text-sm">Cash pagos: <b>{report.summary.cashFromPayments}</b> • QR pagos: <b>{report.summary.qrFromPayments}</b></div>
-              <div className="text-sm">Mov IN: <b>{report.summary.movIn}</b> • Mov OUT: <b>{report.summary.movOut}</b></div>
-              <div className="text-sm">Expected cash: <b>{report.summary.expectedCash}</b></div>
-              {report.summary.counted !== null && <div className="text-sm">Counted: <b>{report.summary.counted}</b> • Diff: <b>{report.summary.diff}</b></div>}
+              <div className="text-sm">Entradas: <b>{report.summary.movIn}</b> • Salidas: <b>{report.summary.movOut}</b></div>
+              <div className="text-sm">Efectivo esperado: <b>{report.summary.expectedCash}</b></div>
+              {report.summary.counted !== null && <div className="text-sm">Contado: <b>{report.summary.counted}</b> • Diferencia: <b>{report.summary.diff}</b></div>}
               <div className="mt-3 text-sm font-semibold">Pagos: {report.payments.length}</div>
               <div className="max-h-[320px] overflow-auto border rounded-xl">
                 <table className="w-full text-sm">
@@ -1508,7 +1529,7 @@ async function addMovement() {
                     {report.payments.map((p: any) => (
                       <tr key={p.id} className="border-t">
                         <td className="p-2">{new Date(p.paidAt).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</td>
-                        <td className="p-2">{p.method}{p.status==="VOID" ? " (VOID)" : ""}</td>
+                        <td className="p-2">{p.method}{p.status==="VOID" ? " (ANULADO)" : ""}</td>
                         <td className="p-2 text-right">{p.amountTotal}</td>
                         <td className="p-2 text-right">{p.amountCash}</td>
                         <td className="p-2 text-right">{p.amountQr}</td>
@@ -1807,3 +1828,4 @@ function AvailabilityEditor({ staffId, staff, onPickStaff }: { staffId: string; 
     </div>
   );
 }
+
