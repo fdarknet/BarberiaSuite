@@ -123,6 +123,34 @@ async function processAndReplaceBrandingImage(orgId: string, file: Express.Multe
   return `/uploads/org_${orgId}/branding/${filename}`;
 }
 
+function removeUploadedAsset(url: string | null | undefined) {
+  if (!url || !url.startsWith("/uploads/")) return;
+  const relative = url.replace(/^\/uploads\//, "");
+  const target = path.resolve(uploadsDir, relative);
+  if (!target.startsWith(uploadsDir)) return;
+  try { if (fs.existsSync(target)) fs.unlinkSync(target); } catch {}
+}
+
+async function processAndReplaceProductImage(orgId: string, productId: string, file: Express.Multer.File, previousUrl?: string | null) {
+  const dir = getOrgUploadDir(orgId, "products");
+  const filename = `product-${productId}-${Date.now()}.jpg`;
+  const fullPath = path.join(dir, filename);
+
+  const img = await Jimp.read(file.path);
+  const maxSide = Math.max(img.bitmap.width, img.bitmap.height);
+  if (maxSide > IMAGE_MAX_DIM) {
+    if (img.bitmap.width >= img.bitmap.height) img.resize(IMAGE_MAX_DIM, Jimp.AUTO);
+    else img.resize(Jimp.AUTO, IMAGE_MAX_DIM);
+  }
+  img.quality(JPG_QUALITY);
+  await img.writeAsync(fullPath);
+
+  try { fs.unlinkSync(file.path); } catch {}
+  removeUploadedAsset(previousUrl);
+
+  return `/uploads/org_${orgId}/products/${filename}`;
+}
+
 
 function getOrgUploadDir(orgId: string, sub: string) {
   const dir = path.join(uploadsDir, `org_${orgId}`, sub);
@@ -650,6 +678,7 @@ router.put("/admin/org/settings", authRequired, requireRole("ADMIN"), async (req
   company: z.any().optional(),
   print: z.any().optional(),
   branding: z.any().optional(),
+  store: z.any().optional(),
 }).partial();
   const body = schema.parse(req.body);
 
@@ -766,12 +795,17 @@ router.get("/org/:orgId/public", async (req, res) => {
   const settings = (org.settings as any) || {};
   const branding = settings.branding || {};
   const company = settings.company || {};
+  const store = settings.store || {};
   res.json({
     org: {
       id: org.id,
       name: org.name,
       logoUrl: org.logoUrl,
       company,
+      whatsappDisplayNumber: settings.whatsappDisplayNumber || null,
+      store: {
+        enabled: store.enabled ?? true,
+      },
       branding: {
         coverUrl: branding.coverUrl || null,
         displayMode: branding.displayMode || "both",
@@ -781,10 +815,207 @@ router.get("/org/:orgId/public", async (req, res) => {
   });
 });
 
+router.get("/org/:orgId/products", async (req, res) => {
+  const { orgId } = z.object({ orgId: z.string().min(1) }).parse(req.params);
+  const org = await prisma.organization.findUnique({ where: { id: orgId } });
+  if (!org) return res.status(404).json({ error: "Organization not found" });
+  const store = ((org.settings as any) || {}).store || {};
+  const storeEnabled = store.enabled ?? true;
+  if (!storeEnabled) return res.json({ products: [], storeEnabled: false });
+
+  const products = await prisma.product.findMany({
+    where: { orgId, active: true },
+    orderBy: [{ name: "asc" }],
+  });
+  res.json({ products, storeEnabled: true });
+});
+
+// -------------------------
+// Tienda online / Productos
+// -------------------------
+router.get("/admin/products", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const products = await prisma.product.findMany({
+    where: { orgId: u.orgId },
+    orderBy: [{ active: "desc" }, { name: "asc" }],
+  });
+  res.json({ products });
+});
+
+router.post("/admin/products", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const body = z.object({
+    name: z.string().min(2),
+    code: z.string().min(1),
+    price: z.coerce.number().int().min(0),
+    imageUrl: z.string().optional().nullable(),
+    active: z.boolean().optional().default(true),
+  }).parse(req.body);
+
+  const product = await prisma.product.create({
+    data: {
+      orgId: u.orgId,
+      name: body.name.trim(),
+      code: body.code.trim(),
+      price: body.price,
+      imageUrl: body.imageUrl || null,
+      active: body.active,
+    },
+  });
+  res.json({ product });
+});
+
+router.put("/admin/products/:id", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const body = z.object({
+    name: z.string().min(2).optional(),
+    code: z.string().min(1).optional(),
+    price: z.coerce.number().int().min(0).optional(),
+    imageUrl: z.string().optional().nullable(),
+    active: z.boolean().optional(),
+  }).parse(req.body);
+
+  const existing = await prisma.product.findFirst({ where: { id, orgId: u.orgId } });
+  if (!existing) return res.status(404).json({ error: "Product not found" });
+
+  const product = await prisma.product.update({
+    where: { id },
+    data: {
+      ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+      ...(body.code !== undefined ? { code: body.code.trim() } : {}),
+      ...(body.price !== undefined ? { price: body.price } : {}),
+      ...(body.imageUrl !== undefined ? { imageUrl: body.imageUrl || null } : {}),
+      ...(body.active !== undefined ? { active: body.active } : {}),
+    },
+  });
+  res.json({ product });
+});
+
+router.post("/admin/products/:id/image", authRequired, requireRole("ADMIN"), uploadOrgLogo.single("image"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const product = await prisma.product.findFirst({ where: { id, orgId: u.orgId } });
+  if (!product) return res.status(404).json({ error: "Product not found" });
+  if (!req.file) return res.status(400).json({ error: "Missing file" });
+  const chk = ensureAllowedImage(req.file);
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+
+  const imageUrl = await processAndReplaceProductImage(u.orgId, product.id, req.file, product.imageUrl);
+  const updated = await prisma.product.update({ where: { id }, data: { imageUrl } });
+  res.json({ product: updated, imageUrl });
+});
+
+router.delete("/admin/products/:id", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const product = await prisma.product.findFirst({ where: { id, orgId: u.orgId } });
+  if (!product) return res.status(404).json({ error: "Product not found" });
+  await prisma.product.update({ where: { id }, data: { active: false } });
+  res.json({ ok: true });
+});
+
+router.get("/admin/product-sales", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const q = z.object({
+    branchId: z.string().optional(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  }).parse(req.query);
+  const where: any = { orgId: u.orgId };
+  if (q.branchId) where.branchId = q.branchId;
+  if (q.date) {
+    where.soldAt = {
+      gte: new Date(q.date + "T00:00:00"),
+      lte: new Date(q.date + "T23:59:59.999"),
+    };
+  }
+  const sales = await prisma.productSale.findMany({
+    where,
+    include: { items: { include: { product: true } }, soldBy: true, branch: true },
+    orderBy: { soldAt: "desc" },
+    take: 100,
+  });
+  res.json({ sales });
+});
+
+router.post("/admin/product-sales", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const u = (req as any).user as { orgId: string; sub: string };
+  const body = z.object({
+    branchId: z.string().min(1),
+    method: z.enum(["QR","CASH","MIXED"]),
+    amountCash: z.coerce.number().int().min(0).optional(),
+    amountQr: z.coerce.number().int().min(0).optional(),
+    notes: z.string().optional(),
+    items: z.array(z.object({
+      productId: z.string().min(1),
+      quantity: z.coerce.number().int().min(1),
+    })).min(1),
+  }).parse(req.body);
+
+  const branch = await prisma.branch.findFirst({ where: { id: body.branchId, orgId: u.orgId } });
+  if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+  const ids = Array.from(new Set(body.items.map(i => i.productId)));
+  const products = await prisma.product.findMany({ where: { orgId: u.orgId, id: { in: ids }, active: true } });
+  if (products.length !== ids.length) return res.status(400).json({ error: "Invalid product in sale" });
+
+  const productById = new Map<string, (typeof products)[number]>(products.map(p => [p.id, p]));
+  const saleItems = body.items.map(item => {
+    const product = productById.get(item.productId)!;
+    const subtotal = product.price * item.quantity;
+    return { product, quantity: item.quantity, subtotal };
+  });
+  const amountTotal = saleItems.reduce((sum, item) => sum + item.subtotal, 0);
+
+  let cash = body.amountCash ?? 0;
+  let qr = body.amountQr ?? 0;
+  if (body.method === "CASH") {
+    cash = amountTotal;
+    qr = 0;
+  } else if (body.method === "QR") {
+    qr = amountTotal;
+    cash = 0;
+  } else if (cash + qr !== amountTotal) {
+    return res.status(400).json({ error: "MIXED sale must satisfy amountCash + amountQr == total" });
+  }
+
+  let session = await prisma.cashSession.findFirst({ where: { orgId: u.orgId, branchId: body.branchId, status: "OPEN" }, orderBy: { openedAt: "desc" } });
+  if (!session) {
+    session = await prisma.cashSession.create({
+      data: { orgId: u.orgId, branchId: body.branchId, openedByUserId: u.sub, openingCash: 0, status: "OPEN" },
+    });
+  }
+
+  const sale = await prisma.productSale.create({
+    data: {
+      orgId: u.orgId,
+      branchId: body.branchId,
+      soldByUserId: u.sub,
+      method: body.method,
+      amountTotal,
+      amountCash: cash,
+      amountQr: qr,
+      notes: body.notes,
+      cashSessionId: session.id,
+      items: {
+        create: saleItems.map(item => ({
+          productId: item.product.id,
+          quantity: item.quantity,
+          unitPrice: item.product.price,
+          subtotal: item.subtotal,
+        })),
+      },
+    },
+    include: { items: { include: { product: true } }, soldBy: true, branch: true },
+  });
+
+  res.json({ sale });
+});
+
 // -------------------------
 // Admin: Sucursales
 // -------------------------
-router.get("/admin/branches", authRequired, requireRole("ADMIN"), async (req, res) => {
+router.get("/admin/branches", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
   const u = (req as any).user as { orgId: string };
   const branches = await prisma.branch.findMany({ where: { orgId: u.orgId }, orderBy: { createdAt: "asc" } });
   res.json({ branches });
@@ -838,7 +1069,7 @@ router.delete("/admin/branches/:id", authRequired, requireRole("ADMIN"), async (
 // -------------------------
 // Admin: Servicios (org-level) y activación por sucursal
 // -------------------------
-router.get("/admin/services", authRequired, requireRole("ADMIN"), async (req, res) => {
+router.get("/admin/services", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
   const u = (req as any).user as { orgId: string };
   const services = await prisma.service.findMany({ where: { orgId: u.orgId }, orderBy: { name: "asc" } });
   res.json({ services });
@@ -928,7 +1159,7 @@ router.put("/admin/branches/:branchId/services/:serviceId", authRequired, requir
 // -------------------------
 // Admin: Barberos (staff) + foto + servicios asignados
 // -------------------------
-router.get("/admin/staff", authRequired, requireRole("ADMIN"), async (req, res) => {
+router.get("/admin/staff", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
   const q = z.object({ branchId: z.string().optional() }).parse(req.query);
   const u = (req as any).user as { orgId: string };
   const staff = await prisma.staffProfile.findMany({
@@ -1145,15 +1376,17 @@ router.post("/admin/cash/open", authRequired, requireRole("ADMIN","STAFF"), asyn
 
 router.get("/admin/cash/current", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
   const q = z.object({ branchId: z.string().min(1) }).parse(req.query);
-  const session = await prisma.cashSession.findFirst({ where: { branchId: q.branchId, status: "OPEN" }, include: { movements: true, payments: true } });
+  const session = await prisma.cashSession.findFirst({ where: { branchId: q.branchId, status: "OPEN" }, include: { movements: true, payments: true, productSales: true } });
   if (!session) return res.json({ session: null });
 
   const movIn = session.movements.filter(m => m.type === "IN").reduce((s,m)=>s+m.amount,0);
   const movOut = session.movements.filter(m => m.type === "OUT").reduce((s,m)=>s+m.amount,0);
   const cashFromPayments = session.payments.filter(p=>p.status === "PAID").reduce((s,p)=>s+p.amountCash,0);
-  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments;
+  const cashFromProductSales = session.productSales.reduce((s,p)=>s+p.amountCash,0);
+  const qrFromProductSales = session.productSales.reduce((s,p)=>s+p.amountQr,0);
+  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
 
-  res.json({ session, totals: { movIn, movOut, cashFromPayments, expectedCash } });
+  res.json({ session, totals: { movIn, movOut, cashFromPayments, cashFromProductSales, qrFromProductSales, expectedCash } });
 });
 
 router.post("/admin/cash/close", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
@@ -1162,20 +1395,22 @@ router.post("/admin/cash/close", authRequired, requireRole("ADMIN","STAFF"), asy
   const body = schema.parse(req.body);
 
 
-  const session = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, include: { movements: true, payments: true } });
+  const session = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, include: { movements: true, payments: true, productSales: true } });
   if (!session) return res.status(404).json({ error: "No open cash session" });
 
   const movIn = session.movements.filter(m => m.type === "IN").reduce((s,m)=>s+m.amount,0);
   const movOut = session.movements.filter(m => m.type === "OUT").reduce((s,m)=>s+m.amount,0);
   const cashFromPayments = session.payments.filter(p=>p.status === "PAID").reduce((s,p)=>s+p.amountCash,0);
-  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments;
+  const cashFromProductSales = session.productSales.reduce((s,p)=>s+p.amountCash,0);
+  const qrFromProductSales = session.productSales.reduce((s,p)=>s+p.amountQr,0);
+  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
 
   const updated = await prisma.cashSession.update({
     where: { id: session.id },
     data: { status: "CLOSED", closedAt: new Date(), closedByUserId: u.sub, closingCashCounted: body.closingCashCounted, notes: body.notes },
   });
 
-  res.json({ session: updated, summary: { movIn, movOut, cashFromPayments, expectedCash, counted: body.closingCashCounted, diff: body.closingCashCounted - expectedCash } });
+  res.json({ session: updated, summary: { movIn, movOut, cashFromPayments, cashFromProductSales, qrFromProductSales, expectedCash, counted: body.closingCashCounted, diff: body.closingCashCounted - expectedCash } });
 });
 
 
@@ -1210,7 +1445,7 @@ router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN","STAFF"), a
 
   const sessions = await prisma.cashSession.findMany({
     where,
-    include: { movements: true, payments: true, branch: true },
+    include: { movements: true, payments: true, productSales: true, branch: true },
     orderBy: { openedAt: "desc" },
     take: 200,
   });
@@ -1221,8 +1456,12 @@ router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN","STAFF"), a
     const paidPayments = s.payments.filter(p => p.status === "PAID");
     const cashFromPayments = paidPayments.reduce((a,p)=>a+p.amountCash,0);
     const qrFromPayments = paidPayments.reduce((a,p)=>a+p.amountQr,0);
-    const totalSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0);
-    const expectedCash = s.openingCash + movIn - movOut + cashFromPayments;
+    const serviceSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0);
+    const cashFromProductSales = s.productSales.reduce((a,p)=>a+p.amountCash,0);
+    const qrFromProductSales = s.productSales.reduce((a,p)=>a+p.amountQr,0);
+    const productSales = s.productSales.reduce((a,p)=>a+p.amountTotal,0);
+    const totalSales = serviceSales + productSales;
+    const expectedCash = s.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
     const counted = s.closingCashCounted ?? null;
     const diff = counted !== null ? counted - expectedCash : null;
     return {
@@ -1233,7 +1472,7 @@ router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN","STAFF"), a
       openingCash: s.openingCash,
       closingCashCounted: s.closingCashCounted,
       branch: { id: s.branch.id, name: s.branch.name },
-      summary: { movIn, movOut, cashFromPayments, qrFromPayments, totalSales, expectedCash, counted, diff },
+      summary: { movIn, movOut, cashFromPayments, qrFromPayments, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted, diff },
     };
   });
 
@@ -1255,6 +1494,13 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN",
         },
         orderBy: { paidAt: "asc" },
       },
+      productSales: {
+        include: {
+          items: { include: { product: true } },
+          soldBy: true,
+        },
+        orderBy: { soldAt: "asc" },
+      },
     },
   });
   if (!session) return res.status(404).json({ error: "Session not found" });
@@ -1264,8 +1510,12 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN",
   const paidPayments = session.payments.filter(p => p.status === "PAID");
   const cashFromPayments = paidPayments.reduce((a,p)=>a+p.amountCash,0);
   const qrFromPayments = paidPayments.reduce((a,p)=>a+p.amountQr,0);
-  const totalSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0);
-  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments;
+  const serviceSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0);
+  const cashFromProductSales = session.productSales.reduce((a,p)=>a+p.amountCash,0);
+  const qrFromProductSales = session.productSales.reduce((a,p)=>a+p.amountQr,0);
+  const productSales = session.productSales.reduce((a,p)=>a+p.amountTotal,0);
+  const totalSales = serviceSales + productSales;
+  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
   const counted = session.closingCashCounted ?? null;
   const diff = counted !== null ? counted - expectedCash : null;
 
@@ -1280,7 +1530,7 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN",
       branch: { id: session.branch.id, name: session.branch.name, address: session.branch.address, timezone: session.branch.timezone },
       org: { id: session.org.id, name: session.org.name, logoUrl: session.org.logoUrl, settings: session.org.settings },
     },
-    summary: { openingCash: session.openingCash, movIn, movOut, cashFromPayments, qrFromPayments, totalSales, expectedCash, counted, diff },
+    summary: { openingCash: session.openingCash, movIn, movOut, cashFromPayments, qrFromPayments, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted, diff },
     payments: session.payments.map(p => ({
       id: p.id,
       status: p.status,
@@ -1291,6 +1541,22 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN",
       paidAt: p.paidAt,
       service: p.service.name,
       staff: p.staff.displayName,
+    })),
+    productSales: session.productSales.map(s => ({
+      id: s.id,
+      method: s.method,
+      amountTotal: s.amountTotal,
+      amountCash: s.amountCash,
+      amountQr: s.amountQr,
+      soldAt: s.soldAt,
+      soldBy: s.soldBy.email,
+      items: s.items.map(i => ({
+        product: i.product.name,
+        code: i.product.code,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+      })),
     })),
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, API_BASE, assetUrl, getToken, setToken } from "../api";
 
 const ORG_ID = import.meta.env.VITE_ORG_ID as string;
@@ -22,6 +23,7 @@ export default function Booking() {
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
+  const [storeEnabled, setStoreEnabled] = useState(true);
 
   // auth for customers (simple): if no token, show register/login block
   const [mode, setMode] = useState<"login"|"register">("login");
@@ -34,6 +36,8 @@ export default function Booking() {
 
   const authed = useMemo(() => !!getToken(), []);
   const [me, setMe] = useState<any>(null);
+  const hasToken = !!getToken();
+  const isCustomerSession = me?.role === "CUSTOMER";
   const today = isoDateLocal();
   const visibleSlots = useMemo(
     () => slots.filter((slot) => new Date(slot.startAt).getTime() >= nowTick),
@@ -49,7 +53,10 @@ export default function Booking() {
       return;
     }
     api.orgPublic(ORG_ID)
-      .then(r => setOrgLogoUrl(r.org.logoUrl ?? null))
+      .then(r => {
+        setOrgLogoUrl(r.org.logoUrl ?? null);
+        setStoreEnabled(Boolean(r.org.store?.enabled ?? true));
+      })
       .catch(() => {});
     api.branches(ORG_ID).then(r => {
       setBranches(r.branches);
@@ -114,6 +121,10 @@ useEffect(() => {
 
   async function book() {
     if (!selected) return;
+    if (!isCustomerSession) {
+      alert("Para confirmar una reserva necesitas iniciar sesion como cliente.");
+      return;
+    }
     try {
       const r = await api.createAppointment({ branchId, serviceId, staffId: staffId || undefined, startAt: selected });
       alert("✅ Reserva creada: " + r.appointment.id);
@@ -137,8 +148,17 @@ useEffect(() => {
   return (
     <div className="grid md:grid-cols-2 gap-6">
       <div className="bg-white border rounded-2xl p-6 shadow-sm">
-        <h2 className="text-xl font-bold">Reservar</h2>
-        <p className="text-sm text-slate-600 mt-1">Elige sucursal, servicio y horario disponible.</p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold">Reservar</h2>
+            <p className="text-sm text-slate-600 mt-1">Elige sucursal, servicio y horario disponible.</p>
+          </div>
+          {storeEnabled && (
+            <Link to="/tienda" className="shrink-0 rounded-xl border px-3 py-2 text-sm font-bold">
+              Tienda
+            </Link>
+          )}
+        </div>
 
         <div className="mt-4 space-y-3">
           <div>
@@ -213,11 +233,11 @@ useEffect(() => {
         </div>
 
         <div className="mt-5">
-          {!getToken() ? (
+          {!hasToken ? (
             <div className="text-sm text-slate-700">🔒 Inicia sesión (o regístrate) para reservar.</div>
           ) : (
-            <button disabled={!selected} className="w-full rounded-xl bg-slate-900 text-white py-2 disabled:opacity-40" onClick={book}>
-              Confirmar reserva
+            <button disabled={!selected || !me || !isCustomerSession} className="w-full rounded-xl bg-slate-900 text-white py-2 disabled:opacity-40" onClick={book}>
+              {!me ? "Verificando sesion..." : !isCustomerSession ? "Usa una cuenta de cliente" : "Confirmar reserva"}
             </button>
           )}
         </div>
@@ -227,7 +247,7 @@ useEffect(() => {
         <h3 className="text-lg font-bold">Cuenta</h3>
         <p className="text-sm text-slate-600 mt-1">Para reservar necesitas sesión (cliente).</p>
 
-        {!getToken() ? (
+        {!hasToken ? (
           <>
             <div className="mt-3 flex gap-2">
               <button className={"px-3 py-1 rounded-xl border " + (mode==="login"?"bg-slate-900 text-white":"")} onClick={()=>setMode("login")}>Entrar</button>
@@ -270,6 +290,11 @@ useEffect(() => {
         ) : (
           <div className="mt-4">
             <div className="text-sm">Sesión activa ✅</div>
+            {me?.role && me.role !== "CUSTOMER" && (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Esta sesion es de Admin/Barbero. Para reservar, cierra sesion y entra como cliente.
+              </div>
+            )}
             {me?.loyaltyPoints !== undefined && (
               <div className="mt-2 text-sm">⭐ Puntos: <b>{me.loyaltyPoints}</b></div>
             )}

@@ -65,6 +65,8 @@ model Organization {
   payments  Payment[]
   cashSessions CashSession[]
   queueTickets QueueTicket[]
+  products  Product[]
+  productSales ProductSale[]
 }
 
 model Branch {
@@ -83,6 +85,7 @@ model Branch {
   payments       Payment[]
   cashSessions   CashSession[]
   queueTickets   QueueTicket[]
+  productSales   ProductSale[]
 
   @@index([orgId])
 }
@@ -101,6 +104,7 @@ model User {
   customer  CustomerProfile?
   staff     StaffProfile?
   voidedPayments Payment[] @relation("payment_voided_by")
+  productSales ProductSale[] @relation("product_sale_sold_by")
 
 
   cashOpened CashSession[] @relation("cash_opened_by")
@@ -300,9 +304,68 @@ model CashSession {
 
   movements     CashMovement[]
   payments      Payment[]
+  productSales  ProductSale[]
 
   @@index([branchId, status])
   @@index([orgId])
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  code      String
+  price     Int
+  imageUrl  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  saleItems ProductSaleItem[]
+
+  @@unique([orgId, code])
+  @@index([orgId, active])
+}
+
+model ProductSale {
+  id            String        @id @default(cuid())
+  orgId         String
+  branchId      String
+  soldByUserId  String
+  method        PaymentMethod
+  amountTotal   Int
+  amountCash    Int           @default(0)
+  amountQr      Int           @default(0)
+  notes         String?
+  cashSessionId String?
+  soldAt        DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  branch        Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  soldBy        User          @relation("product_sale_sold_by", fields: [soldByUserId], references: [id], onDelete: Cascade)
+  cashSession   CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  items         ProductSaleItem[]
+
+  @@index([branchId, soldAt])
+  @@index([orgId, soldAt])
+  @@index([soldByUserId, soldAt])
+}
+
+model ProductSaleItem {
+  id        String @id @default(cuid())
+  saleId    String
+  productId String
+  quantity  Int
+  unitPrice Int
+  subtotal  Int
+
+  sale      ProductSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product   Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([productId])
 }
 
 model CashMovement {

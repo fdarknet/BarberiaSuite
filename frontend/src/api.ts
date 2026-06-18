@@ -142,6 +142,7 @@ adminSetOrgCover: (coverUrl: string | null, displayMode?: "logo" | "name" | "bot
   request<{ org: any }>(`/admin/org/cover`, { method: "POST", body: JSON.stringify({ coverUrl, displayMode }) }),
 
 orgPublic: (orgId: string) => request<{ org: any }>(`/org/${orgId}/public`),
+publicProducts: (orgId: string) => request<{ products: any[]; storeEnabled?: boolean }>(`/org/${orgId}/products`),
 
   // Admin: branches/services/staff
   adminBranches: () => request<{ branches: any[] }>(`/admin/branches`),
@@ -175,6 +176,25 @@ orgPublic: (orgId: string) => request<{ org: any }>(`/org/${orgId}/public`),
 
   adminGetAvailability: (staffId: string) => request<{ availability: any[] }>(`/admin/staff/${staffId}/availability`),
   adminSetAvailability: (staffId: string, days: any[]) => request<{ ok: boolean }>(`/admin/staff/${staffId}/availability`, { method: "PUT", body: JSON.stringify({ days }) }),
+
+  // Admin: tienda online
+  adminProducts: () => request<{ products: any[] }>(`/admin/products`),
+  adminCreateProduct: (payload: any) => request<{ product: any }>(`/admin/products`, { method: "POST", body: JSON.stringify(payload) }),
+  adminUpdateProduct: (id: string, payload: any) => request<{ product: any }>(`/admin/products/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  adminDeleteProduct: (id: string) => request<{ ok: boolean }>(`/admin/products/${id}`, { method: "DELETE" }),
+  adminUploadProductImage: (productId: string, file: File) => {
+    const form = new FormData();
+    form.append("image", file);
+    return requestForm<{ product: any; imageUrl: string }>(`/admin/products/${productId}/image`, form, "POST");
+  },
+  adminProductSales: (q: { branchId?: string; date?: string }) => {
+    const qs = new URLSearchParams();
+    if (q.branchId) qs.set("branchId", q.branchId);
+    if (q.date) qs.set("date", q.date);
+    const query = qs.toString();
+    return request<{ sales: any[] }>(`/admin/product-sales${query ? `?${query}` : ""}`);
+  },
+  adminCreateProductSale: (payload: any) => request<{ sale: any }>(`/admin/product-sales`, { method: "POST", body: JSON.stringify(payload) }),
 
   // Admin: caja/pagos
   cashOpen: (branchId: string, openingCash: number) => request<{ session: any; alreadyOpen?: boolean }>(`/admin/cash/open`, { method: "POST", body: JSON.stringify({ branchId, openingCash }) }),

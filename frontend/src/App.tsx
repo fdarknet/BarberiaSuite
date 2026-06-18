@@ -6,6 +6,7 @@ import Booking from "./pages/Booking";
 import Kiosk from "./pages/Kiosk";
 import Login from "./pages/Login";
 import Admin from "./pages/Admin";
+import Shop from "./pages/Shop";
 
 const ORG_ID = import.meta.env.VITE_ORG_ID as string;
 
@@ -17,6 +18,7 @@ export default function App() {
     name: "Camarguinho Barber Club",
     logoUrl: null,
   });
+  const [storeEnabled, setStoreEnabled] = useState(true);
 
   useEffect(() => {
     const h = () => setTokState(getToken());
@@ -33,6 +35,7 @@ export default function App() {
           name: companyName || r.org.name || "Camarguinho Barber Club",
           logoUrl: r.org.logoUrl ?? null,
         });
+        setStoreEnabled(Boolean(r.org.store?.enabled ?? true));
       })
       .catch(() => {});
   }, []);
@@ -56,6 +59,7 @@ export default function App() {
             {!isBooking && (
               <nav className="flex gap-3 text-sm">
                 <Link to="/reservar" className="hover:underline">Reservar</Link>
+                {storeEnabled && <Link to="/tienda" className="hover:underline">Tienda</Link>}
                 <Link to="/admin" className="hover:underline">Admin</Link>
                 {isAuthed ? (
                   <button
@@ -77,6 +81,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/reservar" element={<Booking />} />
+          <Route path="/tienda" element={<Shop />} />
           <Route path="/login" element={<Login onLogin={() => setTokState(getToken())} />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/kiosk" element={<Kiosk />} />

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, API_BASE, assetUrl, getToken, setToken } from "../api";
 import { Link } from "react-router-dom";
 
-type Tab = "agenda" | "sucursales" | "servicios" | "barberos" | "horarios" | "caja" | "pagos" | "cola" | "fidelizacion" | "ajustes" | "comisiones";
+type Tab = "agenda" | "sucursales" | "servicios" | "barberos" | "horarios" | "caja" | "pagos" | "cola" | "tienda" | "fidelizacion" | "ajustes" | "comisiones";
 
 function isoDateLocal(d = new Date()) {
   const x = new Date(d);
@@ -36,6 +36,9 @@ export default function Admin() {
   const [tab, setTab] = useState<Tab>("agenda");
 
   const [org, setOrg] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [storeEnabled, setStoreEnabled] = useState(true);
+  const [savingStoreToggle, setSavingStoreToggle] = useState(false);
 
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState<string>("");
@@ -103,6 +106,7 @@ const [orgImages, setOrgImages] = useState<any[]>([]);
   async function loadOrg() {
     const r = await api.adminOrgSettings();
     setOrg(r.org);
+    setStoreEnabled(Boolean(r.org.settings?.store?.enabled ?? true));
     setWaNumber((r.org.settings?.whatsappDisplayNumber ?? "") as string);
     setCashPin(String(r.org.settings?.cashPin ?? "1234"));
 const c = (r.org.settings?.company ?? {}) as any;
@@ -154,6 +158,7 @@ try {
 
   useEffect(() => {
     if (!token) return;
+    api.authMe().then(r => setCurrentUser(r.user)).catch(() => {});
     loadCore().catch(console.error);
   }, [token]);
 
@@ -213,6 +218,7 @@ try {
     { id: "caja", label: "Caja" },
     { id: "comisiones", label: "Comisiones" },
     { id: "cola", label: "Lista de Espera" },
+    { id: "tienda", label: "Tienda" },
     { id: "sucursales", label: "Sucursales" },
     { id: "servicios", label: "Servicios" },
     { id: "barberos", label: "Barberos" },
@@ -366,6 +372,26 @@ try {
             </div>
           </div>
         </div>
+      )}
+
+      {tab === "tienda" && (
+        <StoreAdminPanel
+          branchId={branchId}
+          date={date}
+          canManage={currentUser?.role === "ADMIN"}
+          storeEnabled={storeEnabled}
+          savingStoreToggle={savingStoreToggle}
+          onToggleStore={async () => {
+            if (savingStoreToggle) return;
+            setSavingStoreToggle(true);
+            try {
+              await api.adminUpdateOrgSettings({ store: { enabled: !storeEnabled } });
+              await loadOrg();
+            } finally {
+              setSavingStoreToggle(false);
+            }
+          }}
+        />
       )}
 
 {tab === "sucursales" && (
@@ -988,6 +1014,286 @@ try {
 </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function StoreAdminPanel({
+  branchId,
+  date,
+  canManage,
+  storeEnabled,
+  savingStoreToggle,
+  onToggleStore,
+}: {
+  branchId: string;
+  date: string;
+  canManage: boolean;
+  storeEnabled: boolean;
+  savingStoreToggle: boolean;
+  onToggleStore: () => Promise<void>;
+}) {
+  const [products, setProducts] = useState<any[]>([]);
+  const [sales, setSales] = useState<any[]>([]);
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [price, setPrice] = useState(0);
+  const [cartProductId, setCartProductId] = useState("");
+  const [cartQty, setCartQty] = useState(1);
+  const [cart, setCart] = useState<{ productId: string; quantity: number }[]>([]);
+  const [method, setMethod] = useState<"CASH" | "QR" | "MIXED">("CASH");
+  const [cash, setCash] = useState(0);
+  const [qr, setQr] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    const [p, s] = await Promise.all([
+      api.adminProducts(),
+      api.adminProductSales({ branchId, date }),
+    ]);
+    setProducts(p.products ?? []);
+    setSales(s.sales ?? []);
+  }
+
+  useEffect(() => {
+    if (!branchId) return;
+    load().catch(console.error);
+  }, [branchId, date]);
+
+  const activeProducts = products.filter((p) => p.active);
+  const cartRows = cart.map((item) => {
+    const product = products.find((p) => p.id === item.productId);
+    return { ...item, product, subtotal: (product?.price ?? 0) * item.quantity };
+  }).filter((row) => row.product);
+  const total = cartRows.reduce((sum, row) => sum + row.subtotal, 0);
+  const setPositiveQty = (value: string) => {
+    const parsed = Number(value);
+    setCartQty(Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : 1);
+  };
+  const setMoney = (setter: (value: number) => void, value: string) => {
+    const parsed = Number(value);
+    setter(Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0);
+  };
+
+  useEffect(() => {
+    if (method === "CASH") { setCash(total); setQr(0); }
+    if (method === "QR") { setCash(0); setQr(total); }
+    if (method === "MIXED") {
+      const half = Math.floor(total / 2);
+      setCash(half);
+      setQr(total - half);
+    }
+  }, [method, total]);
+
+  async function createProduct() {
+    if (!canManage || !name.trim() || !code.trim()) return;
+    try {
+      await api.adminCreateProduct({ name: name.trim(), code: code.trim(), price: Math.max(0, Math.round(price)), active: true });
+      setName("");
+      setCode("");
+      setPrice(0);
+      await load();
+    } catch (e: any) {
+      alert("Error: " + String(e?.message ?? e));
+    }
+  }
+
+  async function updateProduct(product: any, patch: any) {
+    try {
+      await api.adminUpdateProduct(product.id, patch);
+      await load();
+    } catch (e: any) {
+      alert("Error: " + String(e?.message ?? e));
+    }
+  }
+
+  async function editProduct(product: any) {
+    const nextName = prompt("Nombre del producto:", product.name);
+    if (nextName === null) return;
+    const nextCode = prompt("Código del producto:", product.code);
+    if (nextCode === null) return;
+    const nextPriceRaw = prompt("Precio:", String(product.price));
+    if (nextPriceRaw === null) return;
+    const nextPrice = Number(nextPriceRaw);
+    if (!nextName.trim() || !nextCode.trim() || !Number.isFinite(nextPrice) || nextPrice < 0) {
+      alert("Datos inválidos");
+      return;
+    }
+    await updateProduct(product, { name: nextName.trim(), code: nextCode.trim(), price: Math.round(nextPrice) });
+  }
+
+  async function uploadProductImage(product: any, file?: File | null) {
+    if (!file) return;
+    try {
+      await api.adminUploadProductImage(product.id, file);
+      await load();
+    } catch (e: any) {
+      alert("Error: " + String(e?.message ?? e));
+    }
+  }
+
+  function addToCart() {
+    if (!cartProductId) return;
+    setCart((prev) => {
+      const existing = prev.find((item) => item.productId === cartProductId);
+      if (existing) {
+        return prev.map((item) => item.productId === cartProductId ? { ...item, quantity: item.quantity + cartQty } : item);
+      }
+      return [...prev, { productId: cartProductId, quantity: cartQty }];
+    });
+    setCartQty(1);
+  }
+
+  async function sell() {
+    if (!branchId || cartRows.length === 0 || saving) return;
+    if (method === "MIXED" && cash + qr !== total) {
+      alert("En pago mixto, efectivo + QR debe igualar el total.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.adminCreateProductSale({
+        branchId,
+        method,
+        amountCash: cash,
+        amountQr: qr,
+        items: cart.map((item) => ({ productId: item.productId, quantity: item.quantity })),
+      });
+      setCart([]);
+      alert("Venta registrada");
+      await load();
+    } catch (e: any) {
+      alert("Error: " + String(e?.message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
+      <div>
+        <h2 className="text-xl font-bold">Tienda Online</h2>
+        <div className="mt-3 flex flex-col gap-3 rounded-xl border bg-slate-50 p-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-sm font-semibold">
+              Tienda publica: {storeEnabled ? "HABILITADA" : "DESHABILITADA"}
+            </div>
+            <div className="text-xs text-slate-600">
+              Controla si los clientes ven el acceso y el catalogo online.
+            </div>
+          </div>
+          {canManage && (
+            <button
+              className={storeEnabled
+                ? "rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-900 disabled:opacity-50"
+                : "rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-900 disabled:opacity-50"}
+              disabled={savingStoreToggle}
+              onClick={() => onToggleStore().catch((e: any) => alert("Error: " + String(e?.message ?? e)))}
+            >
+              {savingStoreToggle ? "Guardando..." : storeEnabled ? "Deshabilitar tienda" : "Habilitar tienda"}
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-slate-600 mt-1">Productos, catálogo público y ventas desde caja.</p>
+      </div>
+
+      {canManage && (
+        <div className="border rounded-2xl p-4">
+          <div className="font-semibold">Nuevo producto</div>
+          <div className="mt-3 grid md:grid-cols-4 gap-2">
+            <input className="border rounded-xl p-2" placeholder="Nombre" value={name} onChange={(e) => setName(e.target.value)} />
+            <input className="border rounded-xl p-2" placeholder="Código" value={code} onChange={(e) => setCode(e.target.value)} />
+            <input className="border rounded-xl p-2" type="number" min="0" placeholder="Precio" value={price} onChange={(e) => setMoney(setPrice, e.target.value)} />
+            <button className="bg-slate-900 text-white rounded-xl px-4 py-2" onClick={createProduct}>Crear</button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="border rounded-2xl p-4">
+          <div className="font-semibold">Productos</div>
+          <div className="mt-3 space-y-2 max-h-[460px] overflow-auto">
+            {products.map((product) => (
+              <div key={product.id} className="border rounded-xl p-3 flex gap-3">
+                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-slate-100">
+                  {product.imageUrl ? <img src={assetUrl(product.imageUrl)} className="h-full w-full object-cover" /> : null}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold truncate">{product.name}</div>
+                  <div className="text-xs text-slate-600">Código: {product.code} • Bs {product.price}</div>
+                  <div className="text-xs text-slate-500">{product.active ? "Activo" : "Oculto"}</div>
+                  {canManage && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <input type="file" accept="image/*" className="text-xs" onChange={(e) => uploadProductImage(product, e.target.files?.[0])} />
+                      <button className="border rounded-xl px-2 py-1 text-xs" onClick={() => editProduct(product)}>
+                        Editar
+                      </button>
+                      <button className="border rounded-xl px-2 py-1 text-xs" onClick={() => updateProduct(product, { active: !product.active })}>
+                        {product.active ? "Ocultar" : "Activar"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {products.length === 0 && <div className="text-sm text-slate-600">Sin productos.</div>}
+          </div>
+        </div>
+
+        <div className="border rounded-2xl p-4">
+          <div className="font-semibold">Venta rápida</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <select className="border rounded-xl p-2 flex-1 min-w-[180px]" value={cartProductId} onChange={(e) => setCartProductId(e.target.value)}>
+              <option value="">Selecciona producto</option>
+              {activeProducts.map((product) => <option key={product.id} value={product.id}>{product.name} - Bs {product.price}</option>)}
+            </select>
+            <input className="border rounded-xl p-2 w-20" type="number" min="1" value={cartQty} onChange={(e) => setPositiveQty(e.target.value)} />
+            <button className="border rounded-xl px-3 py-2" onClick={addToCart}>Agregar</button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {cartRows.map((row) => (
+              <div key={row.productId} className="flex items-center justify-between gap-2 border rounded-xl p-2 text-sm">
+                <span>{row.quantity} x {row.product.name}</span>
+                <span className="font-bold">Bs {row.subtotal}</span>
+              </div>
+            ))}
+            {cartRows.length === 0 && <div className="text-sm text-slate-600">Agrega productos para registrar una venta.</div>}
+          </div>
+
+          <div className="mt-4 grid md:grid-cols-3 gap-2">
+            <select className="border rounded-xl p-2" value={method} onChange={(e) => setMethod(e.target.value as any)}>
+              <option value="CASH">EFECTIVO</option>
+              <option value="QR">QR</option>
+              <option value="MIXED">MIXTO</option>
+            </select>
+            <input className="border rounded-xl p-2" type="number" min="0" value={cash} disabled={method !== "MIXED"} onChange={(e) => setMoney(setCash, e.target.value)} />
+            <input className="border rounded-xl p-2" type="number" min="0" value={qr} disabled={method !== "MIXED"} onChange={(e) => setMoney(setQr, e.target.value)} />
+          </div>
+          <button disabled={saving || total <= 0} className="mt-3 w-full rounded-xl bg-slate-900 text-white py-3 font-bold disabled:opacity-40" onClick={sell}>
+            Registrar venta - Bs {total}
+          </button>
+        </div>
+      </div>
+
+      <div className="border rounded-2xl p-4">
+        <div className="font-semibold">Ventas del día</div>
+        <div className="mt-3 space-y-2 max-h-[320px] overflow-auto">
+          {sales.map((sale) => (
+            <div key={sale.id} className="border rounded-xl p-3 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="font-bold">{new Date(sale.soldAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                <span className="font-bold">Bs {sale.amountTotal}</span>
+              </div>
+              <div className="text-xs text-slate-600">{sale.method} • {sale.soldBy?.email}</div>
+              <div className="mt-1 text-xs text-slate-500">
+                {(sale.items ?? []).map((item: any) => `${item.quantity}x ${item.product?.name}`).join(" • ")}
+              </div>
+            </div>
+          ))}
+          {sales.length === 0 && <div className="text-sm text-slate-600">Sin ventas registradas hoy.</div>}
+        </div>
+      </div>
     </div>
   );
 }

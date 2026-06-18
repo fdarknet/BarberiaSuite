@@ -1,6 +1,19 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { api } from "../api";
+
+const ORG_ID = import.meta.env.VITE_ORG_ID as string;
 
 export default function Home() {
+  const [storeEnabled, setStoreEnabled] = useState(true);
+
+  useEffect(() => {
+    if (!ORG_ID) return;
+    api.orgPublic(ORG_ID)
+      .then((r) => setStoreEnabled(Boolean(r.org.store?.enabled ?? true)))
+      .catch(() => {});
+  }, []);
+
   return (
     <section className="min-h-screen bg-[#050505] text-white flex items-center justify-center px-5 py-10 text-center">
       <div className="w-full max-w-3xl animate-[homeFadeIn_1.1s_ease-out]">
@@ -31,6 +44,20 @@ export default function Home() {
           </span>
         </Link>
 
+        {storeEnabled && (
+          <Link
+            to="/tienda"
+            className="mx-auto mt-4 block max-w-md rounded-lg border border-[#efc6b2] bg-[#efc6b2]/10 px-6 py-5 text-white shadow-[0_10px_30px_rgba(239,198,178,0.12)] transition hover:-translate-y-1 hover:bg-[#efc6b2]/20 focus:outline-none focus:ring-2 focus:ring-[#efc6b2] focus:ring-offset-2 focus:ring-offset-[#050505]"
+          >
+            <span className="block text-lg font-bold uppercase tracking-[0.08em] text-[#efc6b2]">
+              Ver tienda online
+            </span>
+            <span className="mt-2 block text-sm leading-6 text-zinc-100">
+              Productos para tu estilo y cuidado personal.
+            </span>
+          </Link>
+        )}
+
         <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <a
             href="https://www.facebook.com/camarguinhobc"
@@ -47,6 +74,14 @@ export default function Home() {
             className="w-full max-w-xs rounded-full border border-[#d1a751] px-6 py-3 text-white transition hover:bg-[#d1a751] hover:text-[#050505] sm:w-auto"
           >
             WhatsApp
+          </a>
+          <a
+            href="https://www.tiktok.com/@camarguinho68/"
+            target="_blank"
+            rel="noreferrer"
+            className="w-full max-w-xs rounded-full border border-[#d1a751] px-6 py-3 text-white transition hover:bg-[#d1a751] hover:text-[#050505] sm:w-auto"
+          >
+            TikTok
           </a>
         </div>
 
