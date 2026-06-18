@@ -127,7 +127,8 @@ function removeUploadedAsset(url: string | null | undefined) {
   if (!url || !url.startsWith("/uploads/")) return;
   const relative = url.replace(/^\/uploads\//, "");
   const target = path.resolve(uploadsDir, relative);
-  if (!target.startsWith(uploadsDir)) return;
+  const rel = path.relative(uploadsDir, target);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return;
   try { if (fs.existsSync(target)) fs.unlinkSync(target); } catch {}
 }
 
@@ -892,7 +893,7 @@ router.put("/admin/products/:id", authRequired, requireRole("ADMIN"), async (req
   res.json({ product });
 });
 
-router.post("/admin/products/:id/image", authRequired, requireRole("ADMIN"), uploadOrgLogo.single("image"), async (req, res) => {
+router.post("/admin/products/:id/image", authRequired, requireRole("ADMIN","STAFF"), uploadOrgLogo.single("image"), async (req, res) => {
   const u = (req as any).user as { orgId: string };
   const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
   const product = await prisma.product.findFirst({ where: { id, orgId: u.orgId } });
@@ -901,9 +902,15 @@ router.post("/admin/products/:id/image", authRequired, requireRole("ADMIN"), upl
   const chk = ensureAllowedImage(req.file);
   if (!chk.ok) return res.status(400).json({ error: chk.error });
 
-  const imageUrl = await processAndReplaceProductImage(u.orgId, product.id, req.file, product.imageUrl);
-  const updated = await prisma.product.update({ where: { id }, data: { imageUrl } });
-  res.json({ product: updated, imageUrl });
+  try {
+    const imageUrl = await processAndReplaceProductImage(u.orgId, product.id, req.file, product.imageUrl);
+    const updated = await prisma.product.update({ where: { id }, data: { imageUrl } });
+    res.json({ product: updated, imageUrl });
+  } catch (err) {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch {}
+    console.error("Product image upload failed", err);
+    res.status(400).json({ error: "No se pudo procesar la imagen. Usa JPG, PNG, BMP o WEBP." });
+  }
 });
 
 router.delete("/admin/products/:id", authRequired, requireRole("ADMIN"), async (req, res) => {
@@ -1359,7 +1366,7 @@ router.put("/admin/staff/:id/availability", authRequired, requireRole("ADMIN"), 
 // -------------------------
 // Admin: Caja (apertura/cierre) + pagos + comisiones + fidelización
 // -------------------------
-router.post("/admin/cash/open", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.post("/admin/cash/open", authRequired, requireRole("ADMIN"), async (req, res) => {
   const u = (req as any).user as { orgId: string; sub: string };
   const schema = z.object({ branchId: z.string().min(1), openingCash: z.coerce.number().int().min(0).default(0) });
   const body = schema.parse(req.body);
@@ -1374,7 +1381,7 @@ router.post("/admin/cash/open", authRequired, requireRole("ADMIN","STAFF"), asyn
   res.json({ session });
 });
 
-router.get("/admin/cash/current", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.get("/admin/cash/current", authRequired, requireRole("ADMIN"), async (req, res) => {
   const q = z.object({ branchId: z.string().min(1) }).parse(req.query);
   const session = await prisma.cashSession.findFirst({ where: { branchId: q.branchId, status: "OPEN" }, include: { movements: true, payments: true, productSales: true } });
   if (!session) return res.json({ session: null });
@@ -1389,7 +1396,7 @@ router.get("/admin/cash/current", authRequired, requireRole("ADMIN","STAFF"), as
   res.json({ session, totals: { movIn, movOut, cashFromPayments, cashFromProductSales, qrFromProductSales, expectedCash } });
 });
 
-router.post("/admin/cash/close", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.post("/admin/cash/close", authRequired, requireRole("ADMIN"), async (req, res) => {
   const u = (req as any).user as { sub: string };
   const schema = z.object({ branchId: z.string().min(1), closingCashCounted: z.coerce.number().int().min(0), notes: z.string().optional() });
   const body = schema.parse(req.body);
@@ -1414,7 +1421,7 @@ router.post("/admin/cash/close", authRequired, requireRole("ADMIN","STAFF"), asy
 });
 
 
-router.post("/admin/cash/movements", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.post("/admin/cash/movements", authRequired, requireRole("ADMIN"), async (req, res) => {
   const u = (req as any).user as { orgId: string; sub: string };
   const body = z.object({
     branchId: z.string().min(1),
@@ -1432,7 +1439,7 @@ router.post("/admin/cash/movements", authRequired, requireRole("ADMIN","STAFF"),
   res.json({ sessionId: session.id, movement: mov });
 });
 
-router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN"), async (req, res) => {
   const q = z.object({
     branchId: z.string().min(1),
     from: z.string().optional(),
@@ -1479,7 +1486,7 @@ router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN","STAFF"), a
   res.json({ sessions: result });
 });
 
-router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN"), async (req, res) => {
   const id = z.object({ id: z.string().min(1) }).parse(req.params).id;
   const session = await prisma.cashSession.findUnique({
     where: { id },
@@ -1561,7 +1568,7 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN",
   });
 });
 
-router.get("/admin/commissions", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+router.get("/admin/commissions", authRequired, requireRole("ADMIN"), async (req, res) => {
   const q = z.object({
     from: z.string().min(1),
     to: z.string().min(1),

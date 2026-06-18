@@ -4,6 +4,8 @@ import { Link } from "react-router-dom";
 
 type Tab = "agenda" | "sucursales" | "servicios" | "barberos" | "horarios" | "caja" | "pagos" | "cola" | "tienda" | "fidelizacion" | "ajustes" | "comisiones";
 
+const STAFF_ALLOWED_TABS = new Set<Tab>(["agenda", "pagos", "cola", "tienda"]);
+
 function isoDateLocal(d = new Date()) {
   const x = new Date(d);
   x.setMinutes(x.getMinutes() - x.getTimezoneOffset());
@@ -102,6 +104,7 @@ const [orgImages, setOrgImages] = useState<any[]>([]);
 
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
   const [pointsPerBs, setPointsPerBs] = useState(1);
+  const isStaffUser = currentUser?.role === "STAFF";
 
   async function loadOrg() {
     const r = await api.adminOrgSettings();
@@ -162,6 +165,12 @@ try {
     loadCore().catch(console.error);
   }, [token]);
 
+  useEffect(() => {
+    if (isStaffUser && !STAFF_ALLOWED_TABS.has(tab)) {
+      setTab("agenda");
+    }
+  }, [isStaffUser, tab]);
+
   async function loadAgenda() {
     if (!branchId) return;
     const r = await api.adminAppointments(branchId, date);
@@ -194,13 +203,13 @@ try {
   }
 
   useEffect(() => {
-    if (!token || !branchId) return;
+    if (!token || !branchId || !currentUser) return;
     loadAgenda().catch(console.error);
-    loadBranchServices().catch(console.error);
+    if (!isStaffUser) loadBranchServices().catch(console.error);
     loadQueue().catch(console.error);
     loadPaidToday().catch(console.error);
-    loadCash().catch(console.error);
-  }, [token, branchId, date]);
+    if (!isStaffUser) loadCash().catch(console.error);
+  }, [token, branchId, date, isStaffUser, currentUser]);
 
   if (!token) {
     return (
@@ -226,6 +235,8 @@ try {
     { id: "fidelizacion", label: "Fidelización" },
     { id: "ajustes", label: "Ajustes" },
   ];
+  const visibleTabs = currentUser ? (isStaffUser ? tabs.filter((t) => STAFF_ALLOWED_TABS.has(t.id)) : tabs) : [];
+  const activeTab: Tab = isStaffUser && !STAFF_ALLOWED_TABS.has(tab) ? "agenda" : tab;
 
   return (
     <div className="space-y-6">
@@ -251,10 +262,10 @@ try {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          {tabs.map(t => (
+          {visibleTabs.map(t => (
             <button
               key={t.id}
-              className={`px-3 py-2 rounded-xl border ${tab === t.id ? "bg-slate-900 text-white" : "bg-white"}`}
+              className={`px-3 py-2 rounded-xl border ${activeTab === t.id ? "bg-slate-900 text-white" : "bg-white"}`}
               onClick={() => setTab(t.id)}
             >
               {t.label}
@@ -263,7 +274,7 @@ try {
         </div>
       </div>
 
-      {tab === "agenda" && (
+      {activeTab === "agenda" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm">
           <h2 className="text-xl font-bold">Agenda</h2>
           <p className="text-sm text-slate-600 mt-1">Reservas del día por sucursal.</p>
@@ -282,17 +293,17 @@ try {
         </div>
       )}
 
-      {tab === "pagos" && (
+      {activeTab === "pagos" && (
   <PaymentsPanel org={org} branches={branches} branchId={branchId} date={date} />
 )}
 
 
-      {tab === "caja" && (
+      {activeTab === "caja" && (
   <CashProPanel branchId={branchId} branches={branches} org={org} />
 )}
 
 
-      {tab === "cola" && (
+      {activeTab === "cola" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
           <div>
             <h2 className="text-xl font-bold">Lista de Espera</h2>
@@ -374,7 +385,7 @@ try {
         </div>
       )}
 
-      {tab === "tienda" && (
+      {activeTab === "tienda" && (
         <StoreAdminPanel
           branchId={branchId}
           date={date}
@@ -394,7 +405,7 @@ try {
         />
       )}
 
-{tab === "sucursales" && (
+{activeTab === "sucursales" && (
   <div className="bg-white border rounded-2xl p-6 shadow-sm">
     <h2 className="text-xl font-bold">Sucursales</h2>
     <p className="text-sm text-slate-600 mt-1">Crea, edita, selecciona y elimina sucursales.</p>
@@ -486,7 +497,7 @@ try {
 )}
 
 
-{tab === "servicios" && (
+{activeTab === "servicios" && (
   <div className="bg-white border rounded-2xl p-6 shadow-sm">
     <h2 className="text-xl font-bold">Servicios</h2>
     <p className="text-sm text-slate-600 mt-1">Crea, edita y elimina servicios base. Luego actívalos por sucursal con precio personalizado.</p>
@@ -582,7 +593,7 @@ try {
 )}
 
 
-{tab === "barberos" && (
+{activeTab === "barberos" && (
   <div className="bg-white border rounded-2xl p-6 shadow-sm">
     <h2 className="text-xl font-bold">Barberos</h2>
     <p className="text-sm text-slate-600 mt-1">Crea, edita, asigna servicios, sube foto y elimina barberos.</p>
@@ -771,11 +782,11 @@ try {
 )}
 
 
-{tab === "horarios" && (
+{activeTab === "horarios" && (
         <AvailabilityEditor staffId={selectedStaffId} staff={staff} onPickStaff={setSelectedStaffId} />
       )}
 
-      {tab === "fidelizacion" && (
+      {activeTab === "fidelizacion" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm">
           <h2 className="text-xl font-bold">Fidelización por puntos</h2>
           <p className="text-sm text-slate-600 mt-1">Configura puntos por Bs pagado. Se suma al cobrar.</p>
@@ -794,11 +805,11 @@ try {
         </div>
       )}
 
-      {tab === "comisiones" && (
+      {activeTab === "comisiones" && (
   <CommissionsPanel org={org} branches={branches} staff={staff} />
 )}
 
-{tab === "ajustes" && (
+{activeTab === "ajustes" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
           <div>
             <h2 className="text-xl font-bold">Ajustes</h2>
@@ -1222,17 +1233,30 @@ function StoreAdminPanel({
                   <div className="font-bold truncate">{product.name}</div>
                   <div className="text-xs text-slate-600">Código: {product.code} • Bs {product.price}</div>
                   <div className="text-xs text-slate-500">{product.active ? "Activo" : "Oculto"}</div>
-                  {canManage && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <input type="file" accept="image/*" className="text-xs" onChange={(e) => uploadProductImage(product, e.target.files?.[0])} />
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <label className="cursor-pointer rounded-xl border px-2 py-1 text-xs">
+                      Subir imagen
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          uploadProductImage(product, e.target.files?.[0]);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                    {canManage && (
+                      <>
                       <button className="border rounded-xl px-2 py-1 text-xs" onClick={() => editProduct(product)}>
                         Editar
                       </button>
                       <button className="border rounded-xl px-2 py-1 text-xs" onClick={() => updateProduct(product, { active: !product.active })}>
                         {product.active ? "Ocultar" : "Activar"}
                       </button>
-                    </div>
-                  )}
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
