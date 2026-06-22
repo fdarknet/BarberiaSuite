@@ -25,6 +25,15 @@ const cashSessionStatusLabels: Record<string, string> = {
   CLOSED: "CERRADA",
 };
 
+const storeOrderStatusLabels: Record<string, string> = {
+  PENDING_PAYMENT: "PAGO POR VERIFICAR",
+  PAYMENT_CONFIRMED: "PAGO CONFIRMADO",
+  PREPARING: "PREPARANDO",
+  READY: "LISTO PARA ENTREGAR",
+  DELIVERED: "ENTREGADO",
+  CANCELED: "CANCELADO",
+};
+
 function queueStatusLabel(status: string) {
   return queueStatusLabels[status] ?? status;
 }
@@ -41,6 +50,7 @@ export default function Admin() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [storeEnabled, setStoreEnabled] = useState(true);
   const [savingStoreToggle, setSavingStoreToggle] = useState(false);
+  const [paymentQrUrl, setPaymentQrUrl] = useState<string | null>(null);
 
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState<string>("");
@@ -110,6 +120,7 @@ const [orgImages, setOrgImages] = useState<any[]>([]);
     const r = await api.adminOrgSettings();
     setOrg(r.org);
     setStoreEnabled(Boolean(r.org.settings?.store?.enabled ?? true));
+    setPaymentQrUrl(r.org.paymentQrUrl ?? r.org.settings?.payments?.qrImageUrl ?? null);
     setWaNumber((r.org.settings?.whatsappDisplayNumber ?? "") as string);
     setCashPin(String(r.org.settings?.cashPin ?? "1234"));
 const c = (r.org.settings?.company ?? {}) as any;
@@ -912,6 +923,39 @@ try {
 </div>
 
           <div className="border rounded-2xl p-4">
+            <div className="font-semibold">QR de pago</div>
+            <p className="mt-1 text-sm text-slate-600">Se muestra al confirmar reservas y pedidos de la tienda.</p>
+            <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start">
+              {paymentQrUrl ? (
+                <a href={assetUrl(paymentQrUrl)} target="_blank" rel="noreferrer" className="block h-40 w-28 shrink-0 overflow-hidden border bg-white">
+                  <img src={assetUrl(paymentQrUrl)} alt="QR de pago actual" className="h-full w-full object-contain" />
+                </a>
+              ) : (
+                <div className="flex h-40 w-28 shrink-0 items-center justify-center border bg-slate-50 px-2 text-center text-xs text-slate-500">Sin QR</div>
+              )}
+              <div>
+                <label className="inline-block cursor-pointer bg-slate-900 px-4 py-2 font-bold text-white">
+                  Subir QR de pago
+                  <input type="file" className="hidden" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      await api.adminUploadPaymentQr(file);
+                      await loadOrg();
+                      alert("QR de pago actualizado");
+                    } catch (err: any) {
+                      alert(err?.message ?? "No se pudo subir el QR");
+                    } finally {
+                      e.currentTarget.value = "";
+                    }
+                  }} />
+                </label>
+                <p className="mt-2 text-xs text-slate-500">Formatos: JPG, PNG, BMP o WEBP. Maximo 8 MB.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="border rounded-2xl p-4">
             <div className="font-semibold">WhatsApp (número visible)</div>
             <p className="text-sm text-slate-600 mt-1">Este número se incluye en mensajes como “WhatsApp: …”.</p>
             <div className="mt-2 flex gap-2">
@@ -1046,6 +1090,7 @@ function StoreAdminPanel({
 }) {
   const [products, setProducts] = useState<any[]>([]);
   const [sales, setSales] = useState<any[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [price, setPrice] = useState(0);
@@ -1058,12 +1103,14 @@ function StoreAdminPanel({
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const [p, s] = await Promise.all([
+    const [p, s, o] = await Promise.all([
       api.adminProducts(),
       api.adminProductSales({ branchId, date }),
+      api.adminStoreOrders(),
     ]);
     setProducts(p.products ?? []);
     setSales(s.sales ?? []);
+    setOrders(o.orders ?? []);
   }
 
   useEffect(() => {
@@ -1180,6 +1227,15 @@ function StoreAdminPanel({
     }
   }
 
+  async function updateOrderStatus(orderId: string, status: string) {
+    try {
+      await api.adminUpdateStoreOrder(orderId, status);
+      await load();
+    } catch (e: any) {
+      alert("Error: " + String(e?.message ?? e));
+    }
+  }
+
   return (
     <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
       <div>
@@ -1207,6 +1263,46 @@ function StoreAdminPanel({
         </div>
         <p className="text-sm text-slate-600 mt-1">Productos, catálogo público y ventas desde caja.</p>
       </div>
+
+      <section className="border rounded-2xl p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Pedidos confirmados</h3>
+            <p className="mt-1 text-xs text-slate-600">Pedidos enviados desde la tienda online. Confirma el pago despues de revisar el comprobante.</p>
+          </div>
+          <button className="border px-3 py-2 text-sm font-bold" onClick={() => load().catch(console.error)}>Actualizar</button>
+        </div>
+        <div className="mt-4 space-y-3">
+          {orders.map((order) => (
+            <article key={order.id} className="border p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="font-extrabold">Pedido #{order.id.slice(-8).toUpperCase()}</div>
+                  <div className="mt-1 text-sm font-semibold">{order.customerName}</div>
+                  <a className="text-sm underline" href={`https://wa.me/${String(order.customerPhone ?? "").replace(/\D/g, "")}`} target="_blank" rel="noreferrer">{order.customerPhone}</a>
+                  <div className="mt-1 text-xs text-slate-500">{new Date(order.createdAt).toLocaleString("es-BO")}</div>
+                </div>
+                <div className="md:text-right">
+                  <div className="text-xl font-extrabold">Bs {order.amountTotal}</div>
+                  <select className="mt-2 border p-2 text-sm font-bold" value={order.status} onChange={(e) => updateOrderStatus(order.id, e.target.value)}>
+                    {Object.entries(storeOrderStatusLabels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="mt-3 border-t pt-3 text-sm">
+                {(order.items ?? []).map((item: any) => (
+                  <div key={item.id} className="flex justify-between gap-3 py-1">
+                    <span>{item.quantity} x {item.product?.name}</span>
+                    <b>Bs {item.subtotal}</b>
+                  </div>
+                ))}
+              </div>
+              {order.notes && <div className="mt-2 bg-slate-50 p-2 text-sm"><b>Nota:</b> {order.notes}</div>}
+            </article>
+          ))}
+          {orders.length === 0 && <div className="text-sm text-slate-600">Todavia no hay pedidos online.</div>}
+        </div>
+      </section>
 
       {canManage && (
         <div className="border rounded-2xl p-4">

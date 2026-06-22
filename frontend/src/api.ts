@@ -129,6 +129,11 @@ export const api = {
     form.append("logo", file);
     return requestForm<{ logoUrl: string }>(`/admin/org/logo`, form, "POST");
   },
+  adminUploadPaymentQr: (file: File) => {
+    const form = new FormData();
+    form.append("qr", file);
+    return requestForm<{ qrImageUrl: string }>(`/admin/org/payment-qr`, form, "POST");
+  },
 
 adminOrgImages: () => request<{ images: any[]; coverUrl: string | null; displayMode: string }>(`/admin/org/images`),
 adminUploadOrgImage: (file: File) => {
@@ -143,6 +148,7 @@ adminSetOrgCover: (coverUrl: string | null, displayMode?: "logo" | "name" | "bot
 
 orgPublic: (orgId: string) => request<{ org: any }>(`/org/${orgId}/public`),
 publicProducts: (orgId: string) => request<{ products: any[]; storeEnabled?: boolean }>(`/org/${orgId}/products`),
+createStoreOrder: (orgId: string, payload: any) => request<{ order: any; paymentQrUrl: string | null }>(`/org/${orgId}/store-orders`, { method: "POST", body: JSON.stringify(payload) }),
 
   // Admin: branches/services/staff
   adminBranches: () => request<{ branches: any[] }>(`/admin/branches`),
@@ -195,6 +201,8 @@ publicProducts: (orgId: string) => request<{ products: any[]; storeEnabled?: boo
     return request<{ sales: any[] }>(`/admin/product-sales${query ? `?${query}` : ""}`);
   },
   adminCreateProductSale: (payload: any) => request<{ sale: any }>(`/admin/product-sales`, { method: "POST", body: JSON.stringify(payload) }),
+  adminStoreOrders: () => request<{ orders: any[] }>(`/admin/store-orders`),
+  adminUpdateStoreOrder: (id: string, status: string) => request<{ order: any }>(`/admin/store-orders/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
 
   // Admin: caja/pagos
   cashOpen: (branchId: string, openingCash: number) => request<{ session: any; alreadyOpen?: boolean }>(`/admin/cash/open`, { method: "POST", body: JSON.stringify({ branchId, openingCash }) }),

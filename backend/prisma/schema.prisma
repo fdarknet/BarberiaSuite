@@ -52,6 +52,15 @@ enum QueueStatus {
   CANCELED
 }
 
+enum StoreOrderStatus {
+  PENDING_PAYMENT
+  PAYMENT_CONFIRMED
+  PREPARING
+  READY
+  DELIVERED
+  CANCELED
+}
+
 model Organization {
   id        String   @id @default(cuid())
   name      String   @unique
@@ -67,6 +76,7 @@ model Organization {
   queueTickets QueueTicket[]
   products  Product[]
   productSales ProductSale[]
+  storeOrders StoreOrder[]
 }
 
 model Branch {
@@ -323,9 +333,43 @@ model Product {
 
   org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   saleItems ProductSaleItem[]
+  orderItems StoreOrderItem[]
 
   @@unique([orgId, code])
   @@index([orgId, active])
+}
+
+model StoreOrder {
+  id            String @id @default(cuid())
+  orgId         String
+  customerName  String
+  customerPhone String
+  notes         String?
+  amountTotal   Int
+  status        StoreOrderStatus @default(PENDING_PAYMENT)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  items         StoreOrderItem[]
+
+  @@index([orgId, createdAt])
+  @@index([orgId, status])
+}
+
+model StoreOrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  productId String
+  quantity  Int
+  unitPrice Int
+  subtotal  Int
+
+  order     StoreOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
 }
 
 model ProductSale {

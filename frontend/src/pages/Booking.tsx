@@ -4,10 +4,25 @@ import { api, API_BASE, assetUrl, getToken, setToken } from "../api";
 
 const ORG_ID = import.meta.env.VITE_ORG_ID as string;
 
+function onlyDigits(value: string | null | undefined) {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
 function isoDateLocal(d = new Date()) {
   const x = new Date(d);
   x.setMinutes(x.getMinutes() - x.getTimezoneOffset());
   return x.toISOString().slice(0, 10);
+}
+
+function isoDateInTimeZone(d = new Date(), timeZone = "America/La_Paz") {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 export default function Booking() {
@@ -24,6 +39,9 @@ export default function Booking() {
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
   const [storeEnabled, setStoreEnabled] = useState(true);
+  const [paymentQrUrl, setPaymentQrUrl] = useState<string | null>(null);
+  const [paymentWhatsapp, setPaymentWhatsapp] = useState("59167794793");
+  const [confirmedAppointment, setConfirmedAppointment] = useState<any>(null);
 
   // auth for customers (simple): if no token, show register/login block
   const [mode, setMode] = useState<"login"|"register">("login");
@@ -38,7 +56,9 @@ export default function Booking() {
   const [me, setMe] = useState<any>(null);
   const hasToken = !!getToken();
   const isCustomerSession = me?.role === "CUSTOMER";
-  const today = isoDateLocal();
+  const selectedBranch = useMemo(() => branches.find((branch) => branch.id === branchId), [branches, branchId]);
+  const branchTimezone = selectedBranch?.timezone || "America/La_Paz";
+  const today = isoDateInTimeZone(new Date(), branchTimezone);
   const visibleSlots = useMemo(
     () => slots.filter((slot) => new Date(slot.startAt).getTime() >= nowTick),
     [slots, nowTick]
@@ -56,6 +76,9 @@ export default function Booking() {
       .then(r => {
         setOrgLogoUrl(r.org.logoUrl ?? null);
         setStoreEnabled(Boolean(r.org.store?.enabled ?? true));
+        setPaymentQrUrl(r.org.paymentQrUrl ?? null);
+        const configuredWhatsapp = onlyDigits(r.org.whatsappDisplayNumber);
+        if (configuredWhatsapp) setPaymentWhatsapp(configuredWhatsapp);
       })
       .catch(() => {});
     api.branches(ORG_ID).then(r => {
@@ -98,6 +121,10 @@ useEffect(() => {
   useEffect(() => { loadSlots(); }, [branchId, serviceId, date, staffId]);
 
   useEffect(() => {
+    if (date < today) setDate(today);
+  }, [date, today]);
+
+  useEffect(() => {
     if (selected && new Date(selected).getTime() < nowTick) {
       setSelected("");
     }
@@ -127,7 +154,8 @@ useEffect(() => {
     }
     try {
       const r = await api.createAppointment({ branchId, serviceId, staffId: staffId || undefined, startAt: selected });
-      alert("✅ Reserva creada: " + r.appointment.id);
+      setConfirmedAppointment(r.appointment);
+      setSelected("");
       await loadSlots();
     } catch (e:any) {
       alert("Error: " + String(e?.message ?? e));
@@ -224,7 +252,7 @@ useEffect(() => {
                   className={"border rounded-xl px-3 py-2 text-sm " + (selected === s.startAt ? "bg-slate-900 text-white" : "bg-white")}
                   onClick={() => setSelected(s.startAt)}
                 >
-                  {new Date(s.startAt).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(s.startAt).toLocaleTimeString("es-BO", { timeZone: branchTimezone, hour: "2-digit", minute: "2-digit" })}
                 </button>
               ))}
             </div>
@@ -241,6 +269,29 @@ useEffect(() => {
             </button>
           )}
         </div>
+
+        {confirmedAppointment && (
+          <div className="mt-5 border border-emerald-300 bg-emerald-50 p-4">
+            <div className="text-xs font-bold uppercase text-emerald-700">Reserva confirmada</div>
+            <h3 className="mt-1 text-lg font-extrabold">Reserva #{confirmedAppointment.id.slice(-8).toUpperCase()}</h3>
+            <p className="mt-2 text-sm text-emerald-950">
+              Paga <b>Bs {confirmedAppointment.price}</b> mediante QR y envia tu comprobante para validar la reserva.
+            </p>
+            {paymentQrUrl ? (
+              <img src={assetUrl(paymentQrUrl)} alt="QR de pago" className="mx-auto mt-4 max-h-[620px] w-full object-contain" />
+            ) : (
+              <div className="mt-4 border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">El QR de pago aun no fue configurado.</div>
+            )}
+            <a
+              href={`https://wa.me/${paymentWhatsapp}?text=${encodeURIComponent(`Hola, envio el comprobante de la reserva #${confirmedAppointment.id.slice(-8).toUpperCase()} por Bs ${confirmedAppointment.price}.`)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-4 block bg-[#1f7a4d] px-4 py-3 text-center font-bold text-white"
+            >
+              Enviar comprobante
+            </a>
+          </div>
+        )}
       </div>
 
       <div className="bg-white border rounded-2xl p-6 shadow-sm">

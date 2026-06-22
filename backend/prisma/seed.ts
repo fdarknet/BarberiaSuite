@@ -8,7 +8,7 @@ async function main() {
   const org = await prisma.organization.upsert({
     where: { id: "org_demo" },
     update: {},
-    create: { id: "org_demo", name: "", logoUrl: null, settings: { whatsappDisplayNumber: "+59170000000", loyalty: { enabled: true, pointsPerBs: 1 }, payments: { qrEnabled: true } } },
+    create: { id: "org_demo", name: "", logoUrl: null, settings: { whatsappDisplayNumber: "+59170000000", loyalty: { enabled: true, pointsPerBs: 1 }, payments: { qrEnabled: true, qrImageUrl: "/uploads/org_org_demo/images/payqr.png" } } },
   });
 
   // Create branches (IDs fixed for easy frontend config)

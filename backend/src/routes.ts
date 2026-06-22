@@ -10,7 +10,7 @@ import { prisma } from "./prisma.js";
 import { signToken, authRequired, requireRole } from "./auth.js";
 import { getAvailableSlots } from "./availability.js";
 import { notifQueue } from "./queue.js";
-import { addMinutes } from "./time.js";
+import { addMinutes, dateISOInZone } from "./time.js";
 import { sendEmail } from "./notifications.js";
 
 export const router = Router();
@@ -157,6 +157,14 @@ function getOrgUploadDir(orgId: string, sub: string) {
   const dir = path.join(uploadsDir, `org_${orgId}`, sub);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function paymentQrUrl(orgId: string, settings: any) {
+  const configured = settings?.payments?.qrImageUrl;
+  if (typeof configured === "string" && configured.startsWith("/uploads/")) return configured;
+
+  const fallbackRelative = `org_${orgId}/images/payqr.png`;
+  return fs.existsSync(path.join(uploadsDir, fallbackRelative)) ? `/uploads/${fallbackRelative}` : null;
 }
 
 const uploadOrgLogo = multer({
@@ -491,9 +499,12 @@ router.post("/appointments", authRequired, requireRole("CUSTOMER"), async (req, 
   const branchService = await prisma.branchService.findUnique({ where: { branchId_serviceId: { branchId: body.branchId, serviceId: body.serviceId } } });
   if (!branchService || branchService.enabled === false) return res.status(400).json({ error: "Service not enabled in this branch" });
   const price = (branchService.priceOverride ?? service.basePrice) || 0;
+  const branch = await prisma.branch.findUnique({ where: { id: body.branchId } });
+  const branchTimezone = branch?.timezone || "America/La_Paz";
 
   const start = new Date(body.startAt);
   const end = addMinutes(start, service.durationMin);
+  const localDateISO = dateISOInZone(start, branchTimezone);
 
   // if no staffId provided, choose any available staff at that time
   let staffId = body.staffId;
@@ -501,7 +512,7 @@ router.post("/appointments", authRequired, requireRole("CUSTOMER"), async (req, 
     const slots = await getAvailableSlots({
       branchId: body.branchId,
       serviceId: body.serviceId,
-      dateISO: body.startAt.slice(0, 10),
+      dateISO: localDateISO,
     });
     // find if startAt exists
     const ok = slots.slots.find(s => s.startAt === start.toISOString());
@@ -516,7 +527,7 @@ router.post("/appointments", authRequired, requireRole("CUSTOMER"), async (req, 
       const spec = await getAvailableSlots({
         branchId: body.branchId,
         serviceId: body.serviceId,
-        dateISO: body.startAt.slice(0, 10),
+        dateISO: localDateISO,
         staffId: s.id,
       });
       const ok2 = spec.slots.find(t => t.startAt === start.toISOString());
@@ -528,7 +539,7 @@ router.post("/appointments", authRequired, requireRole("CUSTOMER"), async (req, 
     const spec = await getAvailableSlots({
       branchId: body.branchId,
       serviceId: body.serviceId,
-      dateISO: body.startAt.slice(0, 10),
+      dateISO: localDateISO,
       staffId,
     });
     const ok = spec.slots.find(s => s.startAt === start.toISOString());
@@ -574,11 +585,14 @@ router.patch("/appointments/:id", authRequired, requireRole("CUSTOMER","ADMIN","
   if (body.startAt) {
     const start = new Date(body.startAt);
     const end = addMinutes(start, appt.service.durationMin);
+    const branch = await prisma.branch.findUnique({ where: { id: appt.branchId } });
+    const branchTimezone = branch?.timezone || "America/La_Paz";
+    const localDateISO = dateISOInZone(start, branchTimezone);
     // verify availability for same staff
     const spec = await getAvailableSlots({
       branchId: appt.branchId,
       serviceId: appt.serviceId,
-      dateISO: body.startAt.slice(0, 10),
+      dateISO: localDateISO,
       staffId: appt.staffId,
     });
     const ok = spec.slots.find(s => s.startAt === start.toISOString());
@@ -664,7 +678,7 @@ router.get("/admin/org/settings", authRequired, requireRole("ADMIN","STAFF"), as
   const u = (req as any).user as { orgId: string };
   const org = await prisma.organization.findUnique({ where: { id: u.orgId } });
   if (!org) return res.status(404).json({ error: "Organization not found" });
-  res.json({ org: { id: org.id, name: org.name, logoUrl: org.logoUrl, settings: org.settings } });
+  res.json({ org: { id: org.id, name: org.name, logoUrl: org.logoUrl, paymentQrUrl: paymentQrUrl(org.id, org.settings), settings: org.settings } });
 });
 
 router.put("/admin/org/settings", authRequired, requireRole("ADMIN"), async (req, res) => {
@@ -703,6 +717,31 @@ router.post("/admin/org/logo", authRequired, requireRole("ADMIN"), uploadOrgLogo
   const fileUrl = await processAndReplaceBrandingImage(u.orgId, req.file, "logo");
   const updated = await prisma.organization.update({ where: { id: u.orgId }, data: { logoUrl: fileUrl } });
   res.json({ logoUrl: updated.logoUrl });
+});
+
+router.post("/admin/org/payment-qr", authRequired, requireRole("ADMIN"), uploadOrgLogo.single("qr"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  if (!req.file) return res.status(400).json({ error: "Missing file" });
+  const chk = ensureAllowedImage(req.file);
+  if (!chk.ok) return res.status(400).json({ error: chk.error });
+
+  const org = await prisma.organization.findUnique({ where: { id: u.orgId } });
+  if (!org) return res.status(404).json({ error: "Organization not found" });
+
+  try {
+    const settings = (org.settings as any) || {};
+    const payments = settings.payments || {};
+    const previousUrl = paymentQrUrl(u.orgId, settings);
+    const qrImageUrl = await processAndReplaceBrandingImage(u.orgId, req.file, "payment-qr");
+    settings.payments = { ...payments, qrEnabled: true, qrImageUrl };
+    await prisma.organization.update({ where: { id: u.orgId }, data: { settings } });
+    if (previousUrl && previousUrl !== `/uploads/org_${u.orgId}/images/payqr.png`) removeUploadedAsset(previousUrl);
+    res.json({ qrImageUrl });
+  } catch (err) {
+    try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch {}
+    console.error("Payment QR upload failed", err);
+    res.status(400).json({ error: "No se pudo procesar el QR. Usa JPG, PNG, BMP o WEBP." });
+  }
 });
 
 router.get("/admin/org/images", authRequired, requireRole("ADMIN"), async (req, res) => {
@@ -804,6 +843,7 @@ router.get("/org/:orgId/public", async (req, res) => {
       logoUrl: org.logoUrl,
       company,
       whatsappDisplayNumber: settings.whatsappDisplayNumber || null,
+      paymentQrUrl: paymentQrUrl(org.id, settings),
       store: {
         enabled: store.enabled ?? true,
       },
@@ -831,9 +871,79 @@ router.get("/org/:orgId/products", async (req, res) => {
   res.json({ products, storeEnabled: true });
 });
 
+router.post("/org/:orgId/store-orders", async (req, res) => {
+  const { orgId } = z.object({ orgId: z.string().min(1) }).parse(req.params);
+  const body = z.object({
+    customerName: z.string().trim().min(2).max(100),
+    customerPhone: z.string().trim().min(7).max(30),
+    notes: z.string().trim().max(500).optional(),
+    items: z.array(z.object({
+      productId: z.string().min(1),
+      quantity: z.coerce.number().int().min(1).max(50),
+    })).min(1).max(30),
+  }).parse(req.body);
+
+  const org = await prisma.organization.findUnique({ where: { id: orgId } });
+  if (!org) return res.status(404).json({ error: "Organization not found" });
+  const settings = (org.settings as any) || {};
+  if ((settings.store || {}).enabled === false) return res.status(409).json({ error: "La tienda no esta disponible" });
+
+  const quantities = new Map<string, number>();
+  for (const item of body.items) quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.quantity);
+  const productIds = [...quantities.keys()];
+  const products = await prisma.product.findMany({ where: { orgId, id: { in: productIds }, active: true } });
+  if (products.length !== productIds.length) return res.status(400).json({ error: "Uno de los productos ya no esta disponible" });
+
+  const items = products.map(product => {
+    const quantity = quantities.get(product.id)!;
+    return { productId: product.id, quantity, unitPrice: product.price, subtotal: product.price * quantity };
+  });
+  const amountTotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const order = await prisma.storeOrder.create({
+    data: {
+      orgId,
+      customerName: body.customerName,
+      customerPhone: body.customerPhone,
+      notes: body.notes || null,
+      amountTotal,
+      items: { create: items },
+    },
+    include: { items: { include: { product: true } } },
+  });
+
+  res.json({ order, paymentQrUrl: paymentQrUrl(orgId, settings) });
+});
+
 // -------------------------
 // Tienda online / Productos
 // -------------------------
+router.get("/admin/store-orders", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const orders = await prisma.storeOrder.findMany({
+    where: { orgId: u.orgId },
+    include: { items: { include: { product: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 150,
+  });
+  res.json({ orders });
+});
+
+router.patch("/admin/store-orders/:id", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const body = z.object({
+    status: z.enum(["PENDING_PAYMENT", "PAYMENT_CONFIRMED", "PREPARING", "READY", "DELIVERED", "CANCELED"]),
+  }).parse(req.body);
+  const existing = await prisma.storeOrder.findFirst({ where: { id, orgId: u.orgId } });
+  if (!existing) return res.status(404).json({ error: "Order not found" });
+  const order = await prisma.storeOrder.update({
+    where: { id },
+    data: { status: body.status },
+    include: { items: { include: { product: true } } },
+  });
+  res.json({ order });
+});
+
 router.get("/admin/products", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
   const u = (req as any).user as { orgId: string };
   const products = await prisma.product.findMany({

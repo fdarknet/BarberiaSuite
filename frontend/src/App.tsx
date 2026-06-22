@@ -43,6 +43,7 @@ export default function App() {
   const isAuthed = useMemo(() => !!token, [token]);
   const isHome = location.pathname === "/";
   const isBooking = location.pathname === "/reservar";
+  const isShop = location.pathname === "/tienda";
   const headerLogo = brand.logoUrl ? assetUrl(brand.logoUrl) : "/bc-logo.png";
 
   return (
@@ -60,7 +61,7 @@ export default function App() {
               <nav className="flex gap-3 text-sm">
                 <Link to="/reservar" className="hover:underline">Reservar</Link>
                 {storeEnabled && <Link to="/tienda" className="hover:underline">Tienda</Link>}
-                <Link to="/admin" className="hover:underline">Admin</Link>
+                {!isShop && <Link to="/admin" className="hover:underline">Admin</Link>}
                 {isAuthed ? (
                   <button
                     className="px-3 py-1 rounded bg-slate-900 text-white"
