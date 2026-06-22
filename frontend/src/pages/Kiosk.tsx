@@ -210,8 +210,8 @@ export default function Kiosk() {
 
   async function loadPaidAppointments() {
     if (!branchId) return;
-    const r = await api.queuePaidAppointments(branchId, isoDateLocal());
-    setPaidAppointments(r.paidAppointments);
+    const r = await api.queuePaidAppointments(branchId);
+    setPaidAppointments(r.paidAppointments.filter((appointment) => !appointment.queueStatus));
   }
 
   useEffect(() => {
@@ -553,6 +553,7 @@ function PaidSection({
     appointmentId: string;
     customerName: string;
     ticketNumber: number | null;
+    queueStatus: string | null;
     serviceName: string;
     staffName: string;
     startAt: string | null;

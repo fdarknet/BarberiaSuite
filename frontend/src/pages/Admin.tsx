@@ -196,7 +196,7 @@ try {
 
   async function loadQueue() {
     if (!branchId) return;
-    const r = await api.queueTickets(branchId);
+    const r = await api.queueTickets(branchId, date);
     setQueue(r.tickets);
   }
 
@@ -349,7 +349,7 @@ try {
                       </div>
                     </div>
                     <span className={`queue-status-badge shrink-0 text-xs px-3 py-1.5 font-bold !text-[#fff8ed] ${hasTicket ? "queue-status-badge--reserved" : "queue-status-badge--waiting"}`}>
-                      {hasTicket ? "En cola" : "Pendiente turno"}
+                      {a.queueStatus ? queueStatusLabel(a.queueStatus) : "Pendiente turno"}
                     </span>
                   </div>
                 );

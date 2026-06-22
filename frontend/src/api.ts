@@ -214,7 +214,11 @@ createStoreOrder: (orgId: string, payload: any) => request<{ order: any; payment
 
   // Queue / Walk-ins (kiosk)
   queueCreateTicket: (payload: any) => request<{ ticket: any }>(`/queue/tickets`, { method: "POST", body: JSON.stringify(payload) }),
-  queueTickets: (branchId: string) => request<{ tickets: any[] }>(`/queue/tickets?${new URLSearchParams({ branchId }).toString()}`),
+  queueTickets: (branchId: string, date?: string) => {
+    const qs = new URLSearchParams({ branchId });
+    if (date) qs.set("date", date);
+    return request<{ tickets: any[] }>(`/queue/tickets?${qs.toString()}`);
+  },
   queueUpdateTicket: (id: string, status: string) => request<{ ticket: any }>(`/queue/tickets/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
   queuePaidAppointments: (branchId: string, date?: string) => {
     const qs = new URLSearchParams({ branchId });
@@ -225,6 +229,7 @@ createStoreOrder: (orgId: string, payload: any) => request<{ order: any; payment
         appointmentId: string;
         customerName: string;
         ticketNumber: number | null;
+        queueStatus: string | null;
         serviceName: string;
         staffName: string;
         startAt: string | null;

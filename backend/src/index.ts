@@ -7,6 +7,7 @@ import morgan from "morgan";
 import { env } from "./env.js";
 import { router } from "./routes.js";
 import { prisma } from "./prisma.js";
+import { addDaysISO, dateISOInZone, setDateTimeInZone } from "./time.js";
 import "./queue.js";
 
 const app = express();
@@ -67,8 +68,11 @@ async function promoteAppointmentsToQueue() {
     });
 
     for (const appt of appointments) {
-      const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
-      const dayEnd   = new Date(); dayEnd.setHours(23, 59, 59, 999);
+      const branch = await prisma.branch.findUnique({ where: { id: appt.branchId } });
+      const timezone = branch?.timezone || "America/La_Paz";
+      const dateStr = dateISOInZone(now, timezone);
+      const dayStart = setDateTimeInZone(dateStr, "00:00", timezone);
+      const dayEnd = new Date(setDateTimeInZone(addDaysISO(dateStr, 1), "00:00", timezone).getTime() - 1);
 
       const last = await prisma.queueTicket.findFirst({
         where: { branchId: appt.branchId, createdAt: { gte: dayStart, lte: dayEnd } },

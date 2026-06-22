@@ -10,7 +10,7 @@ import { prisma } from "./prisma.js";
 import { signToken, authRequired, requireRole } from "./auth.js";
 import { getAvailableSlots } from "./availability.js";
 import { notifQueue } from "./queue.js";
-import { addMinutes, dateISOInZone } from "./time.js";
+import { addDaysISO, addMinutes, dateISOInZone, setDateTimeInZone } from "./time.js";
 import { sendEmail } from "./notifications.js";
 
 export const router = Router();
@@ -1904,9 +1904,12 @@ router.get("/queue/paid-appointments", async (req, res) => {
       date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     }).parse(req.query);
 
-    const dateStr = q.date ?? new Date().toISOString().slice(0, 10);
-    const dayStart = new Date(dateStr + "T00:00:00");
-    const dayEnd   = new Date(dateStr + "T23:59:59.999");
+    const branch = await prisma.branch.findUnique({ where: { id: q.branchId } });
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
+    const timezone = branch.timezone || "America/La_Paz";
+    const dateStr = q.date ?? dateISOInZone(new Date(), timezone);
+    const dayStart = setDateTimeInZone(dateStr, "00:00", timezone);
+    const dayEnd = new Date(setDateTimeInZone(addDaysISO(dateStr, 1), "00:00", timezone).getTime() - 1);
 
     const payments = await prisma.payment.findMany({
       where: {
@@ -1935,6 +1938,7 @@ router.get("/queue/paid-appointments", async (req, res) => {
         appointmentId: p.appointmentId,
         customerName: p.appointment?.customer?.fullName ?? "Cliente",
         ticketNumber: p.appointment?.queueTicket?.ticketNumber ?? null,
+        queueStatus:  p.appointment?.queueTicket?.status ?? null,
         serviceName:  (p.appointment?.service ?? p.service)?.name ?? "—",
         staffName:    (p.appointment?.staff ?? p.staff)?.displayName ?? "—",
         startAt:      p.appointment?.startAt ?? null,
@@ -1963,8 +1967,10 @@ router.post("/queue/tickets", async (req, res) => {
   const branch = await prisma.branch.findUnique({ where: { id: body.branchId } });
   if (!branch) return res.status(404).json({ error: "Branch not found" });
 
-  const dayStart = new Date(); dayStart.setHours(0,0,0,0);
-  const dayEnd = new Date(); dayEnd.setHours(23,59,59,999);
+  const timezone = branch.timezone || "America/La_Paz";
+  const dateStr = dateISOInZone(new Date(), timezone);
+  const dayStart = setDateTimeInZone(dateStr, "00:00", timezone);
+  const dayEnd = new Date(setDateTimeInZone(addDaysISO(dateStr, 1), "00:00", timezone).getTime() - 1);
 
   const last = await prisma.queueTicket.findFirst({
     where: { branchId: body.branchId, createdAt: { gte: dayStart, lte: dayEnd } },
@@ -1990,9 +1996,22 @@ router.post("/queue/tickets", async (req, res) => {
 });
 
 router.get("/queue/tickets", async (req, res) => {
-  const q = z.object({ branchId: z.string().min(1) }).parse(req.query);
+  const q = z.object({
+    branchId: z.string().min(1),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  }).parse(req.query);
+  const branch = await prisma.branch.findUnique({ where: { id: q.branchId } });
+  if (!branch) return res.status(404).json({ error: "Branch not found" });
+  const timezone = branch.timezone || "America/La_Paz";
+  const dateStr = q.date ?? dateISOInZone(new Date(), timezone);
+  const dayStart = setDateTimeInZone(dateStr, "00:00", timezone);
+  const dayEnd = new Date(setDateTimeInZone(addDaysISO(dateStr, 1), "00:00", timezone).getTime() - 1);
   const tickets = await prisma.queueTicket.findMany({
-    where: { branchId: q.branchId, status: { in: ["WAITING","CALLED","IN_CHAIR"] } },
+    where: {
+      branchId: q.branchId,
+      createdAt: { gte: dayStart, lte: dayEnd },
+      status: { in: ["WAITING","CALLED","IN_CHAIR"] },
+    },
     include: { service: true, staff: true, appointment: true },
     orderBy: [{ status: "asc" }, { createdAt: "asc" }],
   });
