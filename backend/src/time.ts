@@ -37,15 +37,18 @@ function timeZoneOffsetMs(date: Date, timeZone: string): number {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   }).formatToParts(date);
 
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  // Some Node/ICU builds return midnight as 24:00 even with a 24-hour clock.
+  // Treat it as 00:00 of the reported date so the timezone offset stays correct.
+  const hour = Number(values.hour) % 24;
   const asUTC = Date.UTC(
     Number(values.year),
     Number(values.month) - 1,
     Number(values.day),
-    Number(values.hour),
+    hour,
     Number(values.minute),
     Number(values.second),
   );
