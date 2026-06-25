@@ -15,11 +15,36 @@ import { sendEmail } from "./notifications.js";
 
 export const router = Router();
 
+const wrapAsync = (handler: any) => {
+  if (typeof handler !== "function") return handler;
+  return (req: any, res: any, next: any) => {
+    try {
+      const result = handler(req, res, next);
+      if (result && typeof result.catch === "function") result.catch(next);
+      return result;
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+  const original = (router as any)[method].bind(router);
+  (router as any)[method] = (path: any, ...handlers: any[]) => original(path, ...handlers.map(wrapAsync));
+}
+
 const passwordResetCodes = new Map<string, { codeHash: string; expiresAt: number }>();
 const PASSWORD_RESET_TTL_MS = 15 * 60 * 1000;
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+async function validateCashPin(orgId: string, pin: string) {
+  const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { settings: true } });
+  const settings = (org?.settings as any) ?? {};
+  const expectedPin = String(settings.cashPin ?? "1234");
+  return String(pin) === expectedPin;
 }
 
 // Uploads (logo / fotos / QR)
@@ -266,7 +291,10 @@ router.post("/auth/register", async (req, res) => {
     orgId: z.string().min(1),
     fullName: z.string().min(2),
     email: z.string().email(),
-    phone: z.string().min(6).optional(),
+    phone: z.preprocess(
+      (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+      z.string().min(6, "El teléfono debe tener al menos 6 caracteres").optional()
+    ),
     password: z.string().min(6),
     whatsappOptIn: z.boolean().optional().default(false),
   });
@@ -276,7 +304,8 @@ router.post("/auth/register", async (req, res) => {
   const org = await prisma.organization.findUnique({ where: { id: body.orgId } });
   if (!org) return res.status(404).json({ error: "Organization not found" });
 
-  const existing = await prisma.user.findUnique({ where: { email: body.email } });
+  const email = normalizeEmail(body.email);
+  const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) return res.status(409).json({ error: "Email already exists" });
 
   const passwordHash = await bcrypt.hash(body.password, 10);
@@ -285,7 +314,7 @@ router.post("/auth/register", async (req, res) => {
     data: {
       orgId: body.orgId,
       role: "CUSTOMER",
-      email: body.email,
+      email,
       phone: body.phone,
       passwordHash,
       customer: {
@@ -404,7 +433,17 @@ router.get("/auth/me", authRequired, async (req, res) => {
     where: { id: u.sub },
     include: { customer: true, staff: true },
   });
-  res.json({ user: { ...u, fullName: dbUser?.customer?.fullName, staffName: dbUser?.staff?.displayName } });
+  res.json({
+    user: {
+      ...u,
+      fullName: dbUser?.customer?.fullName ?? dbUser?.staff?.displayName,
+      staffId: dbUser?.staff?.id ?? null,
+      staffName: dbUser?.staff?.displayName,
+      loyaltyPoints: dbUser?.customer?.loyaltyPoints,
+      whatsappOptIn: dbUser?.customer?.whatsappOptIn,
+      preferredChannel: dbUser?.customer?.preferredChannel,
+    },
+  });
 });
 
 
@@ -630,9 +669,23 @@ router.get("/admin/appointments", authRequired, requireRole("ADMIN","STAFF"), as
 
   const dayStart = new Date(q.date + "T00:00:00");
   const dayEnd = new Date(q.date + "T23:59:59.999");
+  const u = (req as any).user as { orgId: string; sub: string; role: Role };
+  let staffIdFilter: string | undefined;
+
+  if (u.role === "STAFF") {
+    const [org, ownStaff] = await Promise.all([
+      prisma.organization.findUnique({ where: { id: u.orgId } }),
+      prisma.staffProfile.findUnique({ where: { userId: u.sub } }),
+    ]);
+    if (!ownStaff) return res.status(403).json({ error: "Staff profile missing" });
+    const settings = (org?.settings as any) ?? {};
+    if (String(settings.staffOperationalScope ?? "own") !== "all") {
+      staffIdFilter = ownStaff.id;
+    }
+  }
 
   const appts = await prisma.appointment.findMany({
-    where: { branchId: q.branchId, startAt: { gte: dayStart, lte: dayEnd } },
+    where: { branchId: q.branchId, startAt: { gte: dayStart, lte: dayEnd }, ...(staffIdFilter ? { staffId: staffIdFilter } : {}) },
     include: {
       service: true,
       staff: true,
@@ -688,6 +741,8 @@ router.put("/admin/org/settings", authRequired, requireRole("ADMIN"), async (req
   loyalty: z.any().optional(),
   payments: z.any().optional(),
   cashPin: z.string().optional(),
+  staffCashReportScope: z.enum(["all", "own"]).optional(),
+  staffOperationalScope: z.enum(["all", "own"]).optional(),
 
   // Datos de empresa + formato impresión/ticket
   company: z.any().optional(),
@@ -1341,9 +1396,19 @@ router.put("/admin/staff/:id", authRequired, requireRole("ADMIN"), async (req, r
   // user fields (optional)
   email: z.string().email().optional(),
   phone: z.string().optional(),
-  password: z.string().min(6).optional(),
+  password: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().min(6, "La contraseña debe tener al menos 6 caracteres").optional()
+  ),
 });
-const body = schema.parse(req.body);
+const parsed = schema.safeParse(req.body);
+if (!parsed.success) {
+  return res.status(400).json({
+    error: parsed.error.issues[0]?.message ?? "Datos inválidos",
+    details: parsed.error.flatten().fieldErrors,
+  });
+}
+const body = parsed.data;
 
 const existing = await prisma.staffProfile.findUnique({ where: { id }, include: { user: true } });
 if (!existing) return res.status(404).json({ error: "Staff not found" });
@@ -1428,6 +1493,152 @@ router.delete("/admin/staff/:id", authRequired, requireRole("ADMIN"), async (req
 
 
 // -------------------------
+// Admin: Clientes
+// -------------------------
+router.get("/admin/customers", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const u = (req as any).user as { orgId: string };
+  const q = z.object({
+    q: z.string().optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(5).max(100).default(10),
+  }).parse(req.query);
+  const search = q.q?.trim();
+  const where = {
+    user: { orgId: u.orgId },
+    ...(search
+      ? {
+          OR: [
+            { fullName: { contains: search, mode: "insensitive" as const } },
+            { user: { email: { contains: search, mode: "insensitive" as const } } },
+            { user: { phone: { contains: search, mode: "insensitive" as const } } },
+          ],
+        }
+      : {}),
+  };
+
+  const total = await prisma.customerProfile.count({ where });
+
+  const customers = await prisma.customerProfile.findMany({
+    where,
+    include: {
+      user: true,
+      _count: { select: { appointments: true, payments: true } },
+    },
+    orderBy: { fullName: "asc" },
+    skip: (q.page - 1) * q.pageSize,
+    take: q.pageSize,
+  });
+
+  res.json({
+    pagination: {
+      page: q.page,
+      pageSize: q.pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / q.pageSize)),
+    },
+    customers: customers.map((c) => ({
+      id: c.id,
+      userId: c.userId,
+      fullName: c.fullName,
+      email: c.user.email,
+      phone: c.user.phone,
+      loyaltyPoints: c.loyaltyPoints,
+      whatsappOptIn: c.whatsappOptIn,
+      preferredChannel: c.preferredChannel,
+      appointmentsCount: c._count.appointments,
+      paymentsCount: c._count.payments,
+    })),
+  });
+});
+
+router.put("/admin/customers/:id", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const body = z.object({
+    fullName: z.string().min(2).optional(),
+    email: z.string().email().optional(),
+    phone: z.string().nullable().optional(),
+    loyaltyPoints: z.coerce.number().int().min(0).optional(),
+    whatsappOptIn: z.boolean().optional(),
+    preferredChannel: z.enum(["email", "whatsapp", "both"]).optional(),
+  }).parse(req.body);
+
+  const existing = await prisma.customerProfile.findUnique({ where: { id }, include: { user: true } });
+  if (!existing) return res.status(404).json({ error: "Customer not found" });
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (body.email !== undefined || body.phone !== undefined) {
+      await tx.user.update({
+        where: { id: existing.userId },
+        data: {
+          email: body.email,
+          phone: body.phone === undefined ? undefined : body.phone || null,
+        },
+      });
+    }
+
+    return tx.customerProfile.update({
+      where: { id },
+      data: {
+        fullName: body.fullName,
+        loyaltyPoints: body.loyaltyPoints,
+        whatsappOptIn: body.whatsappOptIn,
+        preferredChannel: body.preferredChannel,
+      },
+      include: { user: true },
+    });
+  });
+
+  res.json({
+    customer: {
+      id: updated.id,
+      userId: updated.userId,
+      fullName: updated.fullName,
+      email: updated.user.email,
+      phone: updated.user.phone,
+      loyaltyPoints: updated.loyaltyPoints,
+      whatsappOptIn: updated.whatsappOptIn,
+      preferredChannel: updated.preferredChannel,
+    },
+  });
+});
+
+router.delete("/admin/customers/:id", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const customer = await prisma.customerProfile.findUnique({ where: { id } });
+  if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+  const [apptCount, payCount] = await Promise.all([
+    prisma.appointment.count({ where: { customerId: id } }),
+    prisma.payment.count({ where: { customerId: id } }).catch(() => 0 as any),
+  ]);
+
+  if (Number(apptCount) || Number(payCount)) {
+    return res.status(409).json({
+      error: "No se puede eliminar: el cliente tiene reservas o pagos asociados",
+      details: { apptCount, payCount },
+    });
+  }
+
+  await prisma.user.delete({ where: { id: customer.userId } });
+  res.json({ ok: true });
+});
+
+router.post("/admin/customers/:id/password", authRequired, requireRole("ADMIN"), async (req, res) => {
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const body = z.object({
+    password: z.string().min(6, "La contraseña debe tener al menos 6 caracteres"),
+  }).parse(req.body);
+
+  const customer = await prisma.customerProfile.findUnique({ where: { id } });
+  if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+  const passwordHash = await bcrypt.hash(body.password, 10);
+  await prisma.user.update({ where: { id: customer.userId }, data: { passwordHash } });
+  res.json({ ok: true });
+});
+
+
+// -------------------------
 // Admin: Horarios por barbero (disponibilidad semanal)
 // -------------------------
 router.get("/admin/staff/:id/availability", authRequired, requireRole("ADMIN"), async (req, res) => {
@@ -1478,9 +1689,14 @@ router.put("/admin/staff/:id/availability", authRequired, requireRole("ADMIN"), 
 // -------------------------
 router.post("/admin/cash/open", authRequired, requireRole("ADMIN"), async (req, res) => {
   const u = (req as any).user as { orgId: string; sub: string };
-  const schema = z.object({ branchId: z.string().min(1), openingCash: z.coerce.number().int().min(0).default(0) });
+  const schema = z.object({
+    branchId: z.string().min(1),
+    openingCash: z.coerce.number().int().min(0).default(0),
+    pin: z.string().min(1),
+  });
   const body = schema.parse(req.body);
 
+  if (!(await validateCashPin(u.orgId, body.pin))) return res.status(403).json({ error: "Invalid PIN" });
 
   const existing = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" } });
   if (existing) return res.json({ session: existing, alreadyOpen: true });
@@ -1495,39 +1711,73 @@ router.get("/admin/cash/current", authRequired, requireRole("ADMIN"), async (req
   const q = z.object({ branchId: z.string().min(1) }).parse(req.query);
   const session = await prisma.cashSession.findFirst({ where: { branchId: q.branchId, status: "OPEN" }, include: { movements: true, payments: true, productSales: true } });
   if (!session) return res.json({ session: null });
+  const now = new Date();
+  const kioskTickets = await prisma.queueTicket.findMany({
+    where: {
+      orgId: session.orgId,
+      branchId: session.branchId,
+      appointmentId: null,
+      status: "DONE",
+      doneAt: { gte: session.openedAt, lte: now },
+    },
+    include: { service: true },
+  });
 
   const movIn = session.movements.filter(m => m.type === "IN").reduce((s,m)=>s+m.amount,0);
   const movOut = session.movements.filter(m => m.type === "OUT").reduce((s,m)=>s+m.amount,0);
   const cashFromPayments = session.payments.filter(p=>p.status === "PAID").reduce((s,p)=>s+p.amountCash,0);
+  const cashFromKiosk = kioskTickets.reduce((s,t)=>s+(t.service.basePrice ?? 0),0);
   const cashFromProductSales = session.productSales.reduce((s,p)=>s+p.amountCash,0);
   const qrFromProductSales = session.productSales.reduce((s,p)=>s+p.amountQr,0);
-  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
+  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromKiosk + cashFromProductSales;
 
-  res.json({ session, totals: { movIn, movOut, cashFromPayments, cashFromProductSales, qrFromProductSales, expectedCash } });
+  res.json({ session, totals: { movIn, movOut, cashFromPayments, cashFromKiosk, cashFromProductSales, qrFromProductSales, expectedCash } });
 });
 
 router.post("/admin/cash/close", authRequired, requireRole("ADMIN"), async (req, res) => {
-  const u = (req as any).user as { sub: string };
-  const schema = z.object({ branchId: z.string().min(1), closingCashCounted: z.coerce.number().int().min(0), notes: z.string().optional() });
+  const u = (req as any).user as { orgId: string; sub: string };
+  const schema = z.object({
+    branchId: z.string().min(1),
+    closingCashCounted: z.coerce.number().int().min(0),
+    pin: z.string().min(1),
+    notes: z.string().optional(),
+  });
   const body = schema.parse(req.body);
 
+  if (!(await validateCashPin(u.orgId, body.pin))) return res.status(403).json({ error: "Invalid PIN" });
 
   const session = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" }, include: { movements: true, payments: true, productSales: true } });
   if (!session) return res.status(404).json({ error: "No open cash session" });
+  const closedAt = new Date();
+  const kioskTickets = await prisma.queueTicket.findMany({
+    where: {
+      orgId: session.orgId,
+      branchId: session.branchId,
+      appointmentId: null,
+      status: "DONE",
+      doneAt: { gte: session.openedAt, lte: closedAt },
+    },
+    include: { service: true },
+  });
 
   const movIn = session.movements.filter(m => m.type === "IN").reduce((s,m)=>s+m.amount,0);
   const movOut = session.movements.filter(m => m.type === "OUT").reduce((s,m)=>s+m.amount,0);
   const cashFromPayments = session.payments.filter(p=>p.status === "PAID").reduce((s,p)=>s+p.amountCash,0);
+  const kioskServiceSales = kioskTickets.reduce((s,t)=>s+(t.service.basePrice ?? 0),0);
+  const cashFromKiosk = kioskServiceSales;
   const cashFromProductSales = session.productSales.reduce((s,p)=>s+p.amountCash,0);
   const qrFromProductSales = session.productSales.reduce((s,p)=>s+p.amountQr,0);
-  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
+  const serviceSales = session.payments.filter(p=>p.status === "PAID").reduce((s,p)=>s+p.amountTotal,0) + kioskServiceSales;
+  const productSales = session.productSales.reduce((s,p)=>s+p.amountTotal,0);
+  const totalSales = serviceSales + productSales;
+  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromKiosk + cashFromProductSales;
 
   const updated = await prisma.cashSession.update({
     where: { id: session.id },
-    data: { status: "CLOSED", closedAt: new Date(), closedByUserId: u.sub, closingCashCounted: body.closingCashCounted, notes: body.notes },
+    data: { status: "CLOSED", closedAt, closedByUserId: u.sub, closingCashCounted: body.closingCashCounted, notes: body.notes },
   });
 
-  res.json({ session: updated, summary: { movIn, movOut, cashFromPayments, cashFromProductSales, qrFromProductSales, expectedCash, counted: body.closingCashCounted, diff: body.closingCashCounted - expectedCash } });
+  res.json({ session: updated, summary: { movIn, movOut, cashFromPayments, kioskServiceSales, cashFromKiosk, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted: body.closingCashCounted, diff: body.closingCashCounted - expectedCash } });
 });
 
 
@@ -1540,13 +1790,173 @@ router.post("/admin/cash/movements", authRequired, requireRole("ADMIN"), async (
     reason: z.string().min(1),
   }).parse(req.body);
 
-  let session = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" } });
+  const session = await prisma.cashSession.findFirst({ where: { branchId: body.branchId, status: "OPEN" } });
   if (!session) {
-    session = await prisma.cashSession.create({ data: { orgId: u.orgId, branchId: body.branchId, openedByUserId: u.sub, openingCash: 0, status: "OPEN" } });
+    return res.status(409).json({ error: "Abre la caja con PIN antes de registrar movimientos" });
   }
 
   const mov = await prisma.cashMovement.create({ data: { sessionId: session.id, type: body.type, amount: body.amount, reason: body.reason } });
   res.json({ sessionId: session.id, movement: mov });
+});
+
+router.get("/admin/cash/movement-report", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const u = (req as any).user as { orgId: string; sub: string; role: Role };
+  const q = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    branchId: z.string().optional(),
+    staffId: z.string().optional(),
+  }).parse(req.query);
+
+  const org = await prisma.organization.findUnique({ where: { id: u.orgId } });
+  const settings = (org?.settings as any) ?? {};
+  let effectiveStaffId = q.staffId || undefined;
+  const staffScope = String(settings.staffCashReportScope ?? "own");
+
+  if (u.role === "STAFF") {
+    const ownStaff = await prisma.staffProfile.findUnique({ where: { userId: u.sub } });
+    if (!ownStaff) return res.status(403).json({ error: "Staff profile missing" });
+    if (staffScope !== "all") effectiveStaffId = ownStaff.id;
+  }
+
+  const from = new Date(q.from + "T00:00:00");
+  const to = new Date(q.to + "T23:59:59.999");
+  const branchFilter = q.branchId ? { branchId: q.branchId } : {};
+  const staffFilter = effectiveStaffId ? { staffId: effectiveStaffId } : {};
+
+  const [payments, commissionRecords, kioskTickets, productSales] = await Promise.all([
+    prisma.payment.findMany({
+      where: {
+        orgId: u.orgId,
+        status: "PAID",
+        paidAt: { gte: from, lte: to },
+        ...branchFilter,
+        ...staffFilter,
+      },
+      include: { staff: true, service: true, appointment: { include: { queueTicket: true, customer: true } } },
+      orderBy: { paidAt: "asc" },
+    }),
+    prisma.commissionRecord.findMany({
+      where: {
+        createdAt: { gte: from, lte: to },
+        ...(effectiveStaffId ? { staffId: effectiveStaffId } : {}),
+        payment: { orgId: u.orgId, ...(q.branchId ? { branchId: q.branchId } : {}) },
+      },
+      include: { staff: true, payment: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.queueTicket.findMany({
+      where: {
+        orgId: u.orgId,
+        appointmentId: null,
+        status: "DONE",
+        doneAt: { gte: from, lte: to },
+        ...(q.branchId ? { branchId: q.branchId } : {}),
+        ...(effectiveStaffId ? { staffId: effectiveStaffId } : {}),
+      },
+      include: { staff: true, service: true },
+      orderBy: { doneAt: "asc" },
+    }),
+    prisma.productSale.findMany({
+      where: {
+        orgId: u.orgId,
+        soldAt: { gte: from, lte: to },
+        ...(q.branchId ? { branchId: q.branchId } : {}),
+        ...(effectiveStaffId ? { soldBy: { staff: { id: effectiveStaffId } } } : {}),
+      },
+      include: { soldBy: { include: { staff: true } }, items: { include: { product: true } } },
+      orderBy: { soldAt: "asc" },
+    }),
+  ]);
+
+  const rows = new Map<string, any>();
+  const ensureRow = (staffId: string | null | undefined, staffName: string | null | undefined) => {
+    const key = staffId || "sin_barbero";
+    const row = rows.get(key) ?? {
+      staffId: staffId ?? null,
+      staffName: staffName || "Sin barbero",
+      reservationCount: 0,
+      reservationTotal: 0,
+      reservationCash: 0,
+      reservationQr: 0,
+      kioskCount: 0,
+      kioskEstimatedTotal: 0,
+      storeCount: 0,
+      storeTotal: 0,
+      storeCash: 0,
+      storeQr: 0,
+      commissionTotal: 0,
+    };
+    rows.set(key, row);
+    return row;
+  };
+
+  for (const p of payments) {
+    const row = ensureRow(p.staffId, p.staff.displayName);
+    row.reservationCount += 1;
+    row.reservationTotal += p.amountTotal;
+    row.reservationCash += p.amountCash;
+    row.reservationQr += p.amountQr;
+  }
+
+  for (const t of kioskTickets) {
+    const row = ensureRow(t.staffId, t.staff?.displayName);
+    const kioskAmount = t.service.basePrice ?? 0;
+    const kioskCommission = Math.floor((kioskAmount * (t.staff?.commissionPct ?? 0)) / 100);
+    row.kioskCount += 1;
+    row.kioskEstimatedTotal += kioskAmount;
+    row.commissionTotal += kioskCommission;
+  }
+
+  for (const s of productSales) {
+    const staff = s.soldBy.staff;
+    const row = ensureRow(staff?.id, staff?.displayName ?? s.soldBy.email);
+    row.storeCount += 1;
+    row.storeTotal += s.amountTotal;
+    row.storeCash += s.amountCash;
+    row.storeQr += s.amountQr;
+  }
+
+  for (const c of commissionRecords) {
+    const row = ensureRow(c.staffId, c.staff.displayName);
+    row.commissionTotal += c.amount;
+  }
+
+  const resultRows = Array.from(rows.values()).sort((a, b) =>
+    (b.reservationTotal + b.storeTotal + b.kioskEstimatedTotal) - (a.reservationTotal + a.storeTotal + a.kioskEstimatedTotal)
+  );
+  const totals = resultRows.reduce((acc, row) => {
+    acc.reservationCount += row.reservationCount;
+    acc.reservationTotal += row.reservationTotal;
+    acc.reservationCash += row.reservationCash;
+    acc.reservationQr += row.reservationQr;
+    acc.kioskCount += row.kioskCount;
+    acc.kioskEstimatedTotal += row.kioskEstimatedTotal;
+    acc.storeCount += row.storeCount;
+    acc.storeTotal += row.storeTotal;
+    acc.storeCash += row.storeCash;
+    acc.storeQr += row.storeQr;
+    acc.commissionTotal += row.commissionTotal;
+    return acc;
+  }, {
+    reservationCount: 0,
+    reservationTotal: 0,
+    reservationCash: 0,
+    reservationQr: 0,
+    kioskCount: 0,
+    kioskEstimatedTotal: 0,
+    storeCount: 0,
+    storeTotal: 0,
+    storeCash: 0,
+    storeQr: 0,
+    commissionTotal: 0,
+  });
+
+  res.json({
+    scope: { staffCashReportScope: staffScope, effectiveStaffId: effectiveStaffId ?? null },
+    rows: resultRows,
+    totals,
+  });
 });
 
 router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN"), async (req, res) => {
@@ -1567,18 +1977,31 @@ router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN"), async (re
     take: 200,
   });
 
-  const result = sessions.map(s => {
+  const result = await Promise.all(sessions.map(async (s) => {
+    const sessionEnd = s.closedAt ?? new Date();
+    const kioskTickets = await prisma.queueTicket.findMany({
+      where: {
+        orgId: s.orgId,
+        branchId: s.branchId,
+        appointmentId: null,
+        status: "DONE",
+        doneAt: { gte: s.openedAt, lte: sessionEnd },
+      },
+      include: { service: true },
+    });
     const movIn = s.movements.filter(m => m.type === "IN").reduce((a,m)=>a+m.amount,0);
     const movOut = s.movements.filter(m => m.type === "OUT").reduce((a,m)=>a+m.amount,0);
     const paidPayments = s.payments.filter(p => p.status === "PAID");
     const cashFromPayments = paidPayments.reduce((a,p)=>a+p.amountCash,0);
     const qrFromPayments = paidPayments.reduce((a,p)=>a+p.amountQr,0);
-    const serviceSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0);
+    const kioskServiceSales = kioskTickets.reduce((a,t)=>a+(t.service.basePrice ?? 0),0);
+    const cashFromKiosk = kioskServiceSales;
+    const serviceSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0) + kioskServiceSales;
     const cashFromProductSales = s.productSales.reduce((a,p)=>a+p.amountCash,0);
     const qrFromProductSales = s.productSales.reduce((a,p)=>a+p.amountQr,0);
     const productSales = s.productSales.reduce((a,p)=>a+p.amountTotal,0);
     const totalSales = serviceSales + productSales;
-    const expectedCash = s.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
+    const expectedCash = s.openingCash + movIn - movOut + cashFromPayments + cashFromKiosk + cashFromProductSales;
     const counted = s.closingCashCounted ?? null;
     const diff = counted !== null ? counted - expectedCash : null;
     return {
@@ -1589,9 +2012,9 @@ router.get("/admin/cash/sessions", authRequired, requireRole("ADMIN"), async (re
       openingCash: s.openingCash,
       closingCashCounted: s.closingCashCounted,
       branch: { id: s.branch.id, name: s.branch.name },
-      summary: { movIn, movOut, cashFromPayments, qrFromPayments, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted, diff },
+      summary: { movIn, movOut, cashFromPayments, qrFromPayments, kioskServiceSales, cashFromKiosk, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted, diff },
     };
-  });
+  }));
 
   res.json({ sessions: result });
 });
@@ -1621,18 +2044,32 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN")
     },
   });
   if (!session) return res.status(404).json({ error: "Session not found" });
+  const sessionEnd = session.closedAt ?? new Date();
+  const kioskTickets = await prisma.queueTicket.findMany({
+    where: {
+      orgId: session.orgId,
+      branchId: session.branchId,
+      appointmentId: null,
+      status: "DONE",
+      doneAt: { gte: session.openedAt, lte: sessionEnd },
+    },
+    include: { service: true, staff: true },
+    orderBy: { doneAt: "asc" },
+  });
 
   const movIn = session.movements.filter(m => m.type === "IN").reduce((a,m)=>a+m.amount,0);
   const movOut = session.movements.filter(m => m.type === "OUT").reduce((a,m)=>a+m.amount,0);
   const paidPayments = session.payments.filter(p => p.status === "PAID");
   const cashFromPayments = paidPayments.reduce((a,p)=>a+p.amountCash,0);
   const qrFromPayments = paidPayments.reduce((a,p)=>a+p.amountQr,0);
-  const serviceSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0);
+  const kioskServiceSales = kioskTickets.reduce((a,t)=>a+(t.service.basePrice ?? 0),0);
+  const cashFromKiosk = kioskServiceSales;
+  const serviceSales = paidPayments.reduce((a,p)=>a+p.amountTotal,0) + kioskServiceSales;
   const cashFromProductSales = session.productSales.reduce((a,p)=>a+p.amountCash,0);
   const qrFromProductSales = session.productSales.reduce((a,p)=>a+p.amountQr,0);
   const productSales = session.productSales.reduce((a,p)=>a+p.amountTotal,0);
   const totalSales = serviceSales + productSales;
-  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromProductSales;
+  const expectedCash = session.openingCash + movIn - movOut + cashFromPayments + cashFromKiosk + cashFromProductSales;
   const counted = session.closingCashCounted ?? null;
   const diff = counted !== null ? counted - expectedCash : null;
 
@@ -1647,7 +2084,7 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN")
       branch: { id: session.branch.id, name: session.branch.name, address: session.branch.address, timezone: session.branch.timezone },
       org: { id: session.org.id, name: session.org.name, logoUrl: session.org.logoUrl, settings: session.org.settings },
     },
-    summary: { openingCash: session.openingCash, movIn, movOut, cashFromPayments, qrFromPayments, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted, diff },
+    summary: { openingCash: session.openingCash, movIn, movOut, cashFromPayments, qrFromPayments, kioskServiceSales, cashFromKiosk, cashFromProductSales, qrFromProductSales, serviceSales, productSales, totalSales, expectedCash, counted, diff },
     payments: session.payments.map(p => ({
       id: p.id,
       status: p.status,
@@ -1674,6 +2111,16 @@ router.get("/admin/cash/sessions/:id/report", authRequired, requireRole("ADMIN")
         unitPrice: i.unitPrice,
         subtotal: i.subtotal,
       })),
+    })),
+    kioskTickets: kioskTickets.map(t => ({
+      id: t.id,
+      ticketNumber: t.ticketNumber,
+      customerName: t.customerName,
+      status: t.status,
+      amountTotal: t.service.basePrice ?? 0,
+      createdAt: t.createdAt,
+      service: t.service.name,
+      staff: t.staff?.displayName ?? null,
     })),
   });
 });
@@ -1897,11 +2344,64 @@ router.post("/admin/payments", authRequired, requireRole("ADMIN","STAFF"), async
 // -------------------------
 // Reservas pagadas (público - para kiosco)
 // -------------------------
+async function ensureAppointmentQueueTicket(appointmentId: string) {
+  const appt = await prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    include: {
+      customer: true,
+      branch: true,
+      payment: true,
+      queueTicket: { include: { service: true, staff: true, appointment: true } },
+    },
+  });
+  if (!appt) return { status: 404, error: "Appointment not found" } as const;
+  if (!appt.payment || appt.payment.status !== "PAID") return { status: 409, error: "La reserva aun no esta pagada" } as const;
+  if (appt.queueTicket) return { ticket: appt.queueTicket, alreadyExists: true } as const;
+
+  const timezone = appt.branch.timezone || "America/La_Paz";
+  const dateStr = dateISOInZone(appt.startAt, timezone);
+  const dayStart = setDateTimeInZone(dateStr, "00:00", timezone);
+  const dayEnd = new Date(setDateTimeInZone(addDaysISO(dateStr, 1), "00:00", timezone).getTime() - 1);
+
+  const last = await prisma.queueTicket.findFirst({
+    where: { branchId: appt.branchId, createdAt: { gte: dayStart, lte: dayEnd } },
+    orderBy: { ticketNumber: "desc" },
+  });
+  const nextNumber = (last?.ticketNumber ?? 0) + 1;
+
+  try {
+    const ticket = await prisma.queueTicket.create({
+      data: {
+        orgId: appt.orgId,
+        branchId: appt.branchId,
+        ticketNumber: nextNumber,
+        customerName: appt.customer.fullName,
+        serviceId: appt.serviceId,
+        staffId: appt.staffId,
+        status: "WAITING",
+        appointmentId: appt.id,
+      },
+      include: { service: true, staff: true, appointment: true },
+    });
+    return { ticket, alreadyExists: false } as const;
+  } catch (e: any) {
+    if (e?.code === "P2002") {
+      const ticket = await prisma.queueTicket.findUnique({
+        where: { appointmentId: appt.id },
+        include: { service: true, staff: true, appointment: true },
+      });
+      if (ticket) return { ticket, alreadyExists: true } as const;
+    }
+    throw e;
+  }
+}
+
 router.get("/queue/paid-appointments", async (req, res) => {
   try {
     const q = z.object({
       branchId: z.string().min(1),
       date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      staffId: z.string().optional(),
     }).parse(req.query);
 
     const branch = await prisma.branch.findUnique({ where: { id: q.branchId } });
@@ -1915,7 +2415,8 @@ router.get("/queue/paid-appointments", async (req, res) => {
       where: {
         branchId: q.branchId,
         status: "PAID",
-        paidAt: { gte: dayStart, lte: dayEnd },
+        ...(q.staffId ? { staffId: q.staffId } : {}),
+        appointment: { startAt: { gte: dayStart, lte: dayEnd } },
       },
       include: {
         appointment: {
@@ -1929,7 +2430,7 @@ router.get("/queue/paid-appointments", async (req, res) => {
         service: true,
         staff:   true,
       },
-      orderBy: { paidAt: "desc" },
+      orderBy: { appointment: { startAt: "asc" } },
     });
 
     res.json({
@@ -1937,6 +2438,7 @@ router.get("/queue/paid-appointments", async (req, res) => {
         id:           p.id,
         appointmentId: p.appointmentId,
         customerName: p.appointment?.customer?.fullName ?? "Cliente",
+        queueTicketId: p.appointment?.queueTicket?.id ?? null,
         ticketNumber: p.appointment?.queueTicket?.ticketNumber ?? null,
         queueStatus:  p.appointment?.queueTicket?.status ?? null,
         serviceName:  (p.appointment?.service ?? p.service)?.name ?? "—",
@@ -1995,10 +2497,18 @@ router.post("/queue/tickets", async (req, res) => {
   res.json({ ticket });
 });
 
+router.post("/queue/appointments/:id/promote", authRequired, requireRole("ADMIN","STAFF"), async (req, res) => {
+  const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+  const result = await ensureAppointmentQueueTicket(id);
+  if ("error" in result) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+});
+
 router.get("/queue/tickets", async (req, res) => {
   const q = z.object({
     branchId: z.string().min(1),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    staffId: z.string().optional(),
   }).parse(req.query);
   const branch = await prisma.branch.findUnique({ where: { id: q.branchId } });
   if (!branch) return res.status(404).json({ error: "Branch not found" });
@@ -2011,6 +2521,7 @@ router.get("/queue/tickets", async (req, res) => {
       branchId: q.branchId,
       createdAt: { gte: dayStart, lte: dayEnd },
       status: { in: ["WAITING","CALLED","IN_CHAIR"] },
+      ...(q.staffId ? { staffId: q.staffId } : {}),
     },
     include: { service: true, staff: true, appointment: true },
     orderBy: [{ status: "asc" }, { createdAt: "asc" }],

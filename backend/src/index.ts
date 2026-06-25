@@ -4,6 +4,7 @@ import fs from "fs";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import { ZodError } from "zod";
 import { env } from "./env.js";
 import { router } from "./routes.js";
 import { prisma } from "./prisma.js";
@@ -48,6 +49,29 @@ app.use("/api", router);
 
 app.get("/", (_req, res) => res.send("Barbería API OK"));
 
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
+  if (err instanceof ZodError) {
+    res.status(400).json({
+      error: err.issues[0]?.message ?? "Datos inválidos",
+      details: err.flatten().fieldErrors,
+    });
+    return;
+  }
+
+  if (err?.code === "P2002") {
+    res.status(409).json({ error: "Ya existe un registro con esos datos" });
+    return;
+  }
+
+  console.error("[api] unhandled error", err);
+  res.status(500).json({ error: "Error interno del servidor" });
+});
+
 // ─────────────────────────────────────────────────────────────
 // Auto-promoción: sube reservas pagadas a "En Espera" 10 min antes
 // ─────────────────────────────────────────────────────────────
@@ -55,12 +79,13 @@ async function promoteAppointmentsToQueue() {
   try {
     const now = new Date();
     const in10min = new Date(now.getTime() + 10 * 60 * 1000);
+    const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
 
     // Busca citas pagadas cuya hora de inicio está en los próximos 10 min
     // y que todavía NO tienen un QueueTicket vinculado
     const appointments = await prisma.appointment.findMany({
       where: {
-        startAt: { gte: now, lte: in10min },
+        startAt: { gte: sixHoursAgo, lte: in10min },
         payment: { status: "PAID" },
         queueTicket: null,
       },

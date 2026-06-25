@@ -5,7 +5,7 @@ export function assetUrl(p?: string | null) {
   if (p.startsWith("http://") || p.startsWith("https://")) return p;
   return `${API_BASE}${p.startsWith("/") ? "" : "/"}${p}`;
 }
-export type ApiUser = { id: string; role: "ADMIN" | "STAFF" | "CUSTOMER"; email: string; orgId: string; fullName?: string; staffName?: string };
+export type ApiUser = { id: string; role: "ADMIN" | "STAFF" | "CUSTOMER"; email: string; orgId: string; fullName?: string; staffId?: string | null; staffName?: string };
 
 export function getToken(): string | null {
   return localStorage.getItem("token");
@@ -180,6 +180,18 @@ createStoreOrder: (orgId: string, payload: any) => request<{ order: any; payment
     return requestForm<{ photoUrl: string }>(`/admin/staff/${staffId}/photo`, form, "POST");
   },
 
+  adminCustomers: (params: { q?: string; page?: number; pageSize?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+    const query = qs.toString();
+    return request<{ customers: any[]; pagination: { page: number; pageSize: number; total: number; totalPages: number } }>(`/admin/customers${query ? `?${query}` : ""}`);
+  },
+  adminUpdateCustomer: (id: string, payload: any) => request<{ customer: any }>(`/admin/customers/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  adminDeleteCustomer: (id: string) => request<{ ok: boolean }>(`/admin/customers/${id}`, { method: "DELETE" }),
+  adminResetCustomerPassword: (id: string, password: string) => request<{ ok: boolean }>(`/admin/customers/${id}/password`, { method: "POST", body: JSON.stringify({ password }) }),
+
   adminGetAvailability: (staffId: string) => request<{ availability: any[] }>(`/admin/staff/${staffId}/availability`),
   adminSetAvailability: (staffId: string, days: any[]) => request<{ ok: boolean }>(`/admin/staff/${staffId}/availability`, { method: "PUT", body: JSON.stringify({ days }) }),
 
@@ -205,28 +217,32 @@ createStoreOrder: (orgId: string, payload: any) => request<{ order: any; payment
   adminUpdateStoreOrder: (id: string, status: string) => request<{ order: any }>(`/admin/store-orders/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
 
   // Admin: caja/pagos
-  cashOpen: (branchId: string, openingCash: number) => request<{ session: any; alreadyOpen?: boolean }>(`/admin/cash/open`, { method: "POST", body: JSON.stringify({ branchId, openingCash }) }),
+  cashOpen: (branchId: string, openingCash: number, pin: string) => request<{ session: any; alreadyOpen?: boolean }>(`/admin/cash/open`, { method: "POST", body: JSON.stringify({ branchId, openingCash, pin }) }),
   cashCurrent: (branchId: string) => request<{ session: any | null; totals?: any }>(`/admin/cash/current?${new URLSearchParams({ branchId }).toString()}`),
-  cashClose: (branchId: string, closingCashCounted: number, notes?: string) =>
-    request<{ session: any; summary: any }>(`/admin/cash/close`, { method: "POST", body: JSON.stringify({ branchId, closingCashCounted, notes }) }),
+  cashClose: (branchId: string, closingCashCounted: number, pin: string, notes?: string) =>
+    request<{ session: any; summary: any }>(`/admin/cash/close`, { method: "POST", body: JSON.stringify({ branchId, closingCashCounted, pin, notes }) }),
 
   createPayment: (payload: any) => request<{ payment: any; commission: any; pointsAdded: number }>(`/admin/payments`, { method: "POST", body: JSON.stringify(payload) }),
 
   // Queue / Walk-ins (kiosk)
   queueCreateTicket: (payload: any) => request<{ ticket: any }>(`/queue/tickets`, { method: "POST", body: JSON.stringify(payload) }),
-  queueTickets: (branchId: string, date?: string) => {
+  queueTickets: (branchId: string, date?: string, staffId?: string) => {
     const qs = new URLSearchParams({ branchId });
     if (date) qs.set("date", date);
+    if (staffId) qs.set("staffId", staffId);
     return request<{ tickets: any[] }>(`/queue/tickets?${qs.toString()}`);
   },
   queueUpdateTicket: (id: string, status: string) => request<{ ticket: any }>(`/queue/tickets/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
-  queuePaidAppointments: (branchId: string, date?: string) => {
+  queuePromoteAppointment: (appointmentId: string) => request<{ ticket: any; alreadyExists?: boolean }>(`/queue/appointments/${encodeURIComponent(appointmentId)}/promote`, { method: "POST" }),
+  queuePaidAppointments: (branchId: string, date?: string, staffId?: string) => {
     const qs = new URLSearchParams({ branchId });
     if (date) qs.set("date", date);
+    if (staffId) qs.set("staffId", staffId);
     return request<{
       paidAppointments: {
         id: string;
         appointmentId: string;
+        queueTicketId: string | null;
         customerName: string;
         ticketNumber: number | null;
         queueStatus: string | null;
@@ -240,8 +256,9 @@ createStoreOrder: (orgId: string, payload: any) => request<{ order: any; payment
 
 cashSessions: (q: { branchId: string; from?: string; to?: string }) => request(`/admin/cash/sessions?branchId=${encodeURIComponent(q.branchId)}&from=${encodeURIComponent(q.from ?? "")}&to=${encodeURIComponent(q.to ?? "")}`),
 cashSessionReport: (sessionId: string) => request(`/admin/cash/sessions/${encodeURIComponent(sessionId)}/report`),
-cashAddMovement: (body: { branchId: string; type: "IN"|"OUT"; amount: number; reason: string }) => request(`/admin/cash/movements`, { method: "POST", body }),
+cashAddMovement: (body: { branchId: string; type: "IN"|"OUT"; amount: number; reason: string }) => request(`/admin/cash/movements`, { method: "POST", body: JSON.stringify(body) }),
+cashMovementReport: (q: { from: string; to: string; branchId?: string; staffId?: string }) => request(`/admin/cash/movement-report?from=${encodeURIComponent(q.from)}&to=${encodeURIComponent(q.to)}&branchId=${encodeURIComponent(q.branchId ?? "")}&staffId=${encodeURIComponent(q.staffId ?? "")}`),
 commissionsReport: (q: { from: string; to: string; branchId?: string; staffId?: string }) => request(`/admin/commissions?from=${encodeURIComponent(q.from)}&to=${encodeURIComponent(q.to)}&branchId=${encodeURIComponent(q.branchId ?? "")}&staffId=${encodeURIComponent(q.staffId ?? "")}`),
-voidPayment: (paymentId: string, pin: string, reason: string) => request(`/admin/payments/${encodeURIComponent(paymentId)}/void`, { method: "POST", body: { pin, reason } }),
+voidPayment: (paymentId: string, pin: string, reason: string) => request(`/admin/payments/${encodeURIComponent(paymentId)}/void`, { method: "POST", body: JSON.stringify({ pin, reason }) }),
 
 };

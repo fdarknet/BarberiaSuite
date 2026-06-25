@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { api, API_BASE, assetUrl, getToken, setToken } from "../api";
 import { Link } from "react-router-dom";
 
-type Tab = "agenda" | "sucursales" | "servicios" | "barberos" | "horarios" | "caja" | "pagos" | "cola" | "tienda" | "fidelizacion" | "ajustes" | "comisiones";
+type Tab = "agenda" | "sucursales" | "servicios" | "barberos" | "horarios" | "caja" | "pagos" | "cola" | "tienda" | "fidelizacion" | "clientes" | "ajustes";
 
-const STAFF_ALLOWED_TABS = new Set<Tab>(["agenda", "pagos", "cola", "tienda"]);
+const STAFF_ALLOWED_TABS = new Set<Tab>(["agenda", "pagos", "caja", "cola", "tienda"]);
 
 function isoDateLocal(d = new Date()) {
   const x = new Date(d);
@@ -40,6 +40,12 @@ function queueStatusLabel(status: string) {
 
 function cashSessionStatusLabel(status: string) {
   return cashSessionStatusLabels[status] ?? status;
+}
+
+function cashMovementTypeLabel(type: string) {
+  if (type === "IN") return "ENTRADA";
+  if (type === "OUT") return "SALIDA";
+  return type;
 }
 
 export default function Admin() {
@@ -114,7 +120,11 @@ const [orgImages, setOrgImages] = useState<any[]>([]);
 
   const [loyaltyEnabled, setLoyaltyEnabled] = useState(true);
   const [pointsPerBs, setPointsPerBs] = useState(1);
+  const [staffCashReportScope, setStaffCashReportScope] = useState<"all" | "own">("own");
+  const [staffOperationalScope, setStaffOperationalScope] = useState<"all" | "own">("own");
+  const [campaigns, setCampaigns] = useState<any[]>([]);
   const isStaffUser = currentUser?.role === "STAFF";
+  const scopedOperationalStaffId = isStaffUser && staffOperationalScope !== "all" ? currentUser?.staffId ?? undefined : undefined;
 
   async function loadOrg() {
     const r = await api.adminOrgSettings();
@@ -141,6 +151,9 @@ setShowEmail(Boolean(p.showEmail ?? false));
 setShowWA(Boolean(p.showWhatsapp ?? true));
     setLoyaltyEnabled(Boolean(r.org.settings?.loyalty?.enabled ?? false));
     setPointsPerBs(Number(r.org.settings?.loyalty?.pointsPerBs ?? 0));
+    setStaffCashReportScope((r.org.settings?.staffCashReportScope ?? "own") as "all" | "own");
+    setStaffOperationalScope((r.org.settings?.staffOperationalScope ?? "own") as "all" | "own");
+    setCampaigns(Array.isArray(r.org.settings?.loyalty?.campaigns) ? r.org.settings.loyalty.campaigns : []);
 
 // Branding / portada
 const b = (r.org.settings?.branding ?? {}) as any;
@@ -196,14 +209,36 @@ try {
 
   async function loadQueue() {
     if (!branchId) return;
-    const r = await api.queueTickets(branchId, date);
+    const r = await api.queueTickets(branchId, date, scopedOperationalStaffId);
     setQueue(r.tickets);
   }
 
   async function loadPaidToday() {
     if (!branchId) return;
-    const r = await api.queuePaidAppointments(branchId, date);
+    const r = await api.queuePaidAppointments(branchId, date, scopedOperationalStaffId);
     setPaidToday(r.paidAppointments);
+  }
+
+  async function refreshQueueViews() {
+    await Promise.all([loadQueue(), loadPaidToday()]);
+  }
+
+  async function promotePaidAppointment(appointmentId: string) {
+    try {
+      await api.queuePromoteAppointment(appointmentId);
+      await refreshQueueViews();
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo crear el turno");
+    }
+  }
+
+  async function updateQueueStatus(ticketId: string, status: string) {
+    try {
+      await api.queueUpdateTicket(ticketId, status);
+      await refreshQueueViews();
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo cambiar el estado");
+    }
   }
 
   async function loadCash() {
@@ -220,7 +255,7 @@ try {
     loadQueue().catch(console.error);
     loadPaidToday().catch(console.error);
     if (!isStaffUser) loadCash().catch(console.error);
-  }, [token, branchId, date, isStaffUser, currentUser]);
+  }, [token, branchId, date, isStaffUser, currentUser, staffOperationalScope]);
 
   if (!token) {
     return (
@@ -235,19 +270,20 @@ try {
   const tabs: { id: Tab; label: string }[] = [
     { id: "agenda", label: "Agenda" },
     { id: "pagos", label: "Pagos" },
-    { id: "caja", label: "Caja" },
-    { id: "comisiones", label: "Comisiones" },
+    { id: "caja", label: "Movimientos Efectivo" },
     { id: "cola", label: "Lista de Espera" },
     { id: "tienda", label: "Tienda" },
     { id: "sucursales", label: "Sucursales" },
     { id: "servicios", label: "Servicios" },
     { id: "barberos", label: "Barberos" },
     { id: "horarios", label: "Horarios" },
+    { id: "clientes", label: "Gestion de Clientes" },
     { id: "fidelizacion", label: "Fidelización" },
     { id: "ajustes", label: "Ajustes" },
   ];
   const visibleTabs = currentUser ? (isStaffUser ? tabs.filter((t) => STAFF_ALLOWED_TABS.has(t.id)) : tabs) : [];
   const activeTab: Tab = isStaffUser && !STAFF_ALLOWED_TABS.has(tab) ? "agenda" : tab;
+  const walkInQueue = queue.filter((t: any) => !t.fromAppointment);
 
   return (
     <div className="space-y-6">
@@ -310,7 +346,7 @@ try {
 
 
       {activeTab === "caja" && (
-  <CashProPanel branchId={branchId} branches={branches} org={org} />
+  <CashProPanel branchId={branchId} branches={branches} org={org} staff={staff} currentUser={currentUser} staffCashReportScope={staffCashReportScope} onReloadOrg={loadOrg} />
 )}
 
 
@@ -319,7 +355,7 @@ try {
           <div>
             <h2 className="text-xl font-bold">Lista de Espera</h2>
             <p className="text-sm text-slate-600 mt-1">Gestiona turnos sin reserva y pantalla "En espera".</p>
-            <button className="mt-3 border rounded-xl px-3 py-2 text-sm" onClick={() => { loadQueue(); loadPaidToday(); }}>Refrescar</button>
+            <button className="mt-3 border rounded-xl px-3 py-2 text-sm" onClick={refreshQueueViews}>Refrescar</button>
           </div>
 
           {/* Reservas Pagadas */}
@@ -332,7 +368,7 @@ try {
             {paidToday.length === 0 && <div className="text-sm text-slate-500 italic">Sin reservas pagadas para esta fecha.</div>}
             <div className="space-y-2">
               {paidToday.map((a: any) => {
-                const hasTicket = a.ticketNumber != null;
+                const hasTicket = Boolean(a.queueTicketId);
                 return (
                   <div key={a.id} className="queue-admin-row queue-admin-row--reserved rounded-2xl p-3 flex items-center justify-between gap-3 !text-[#0c0b0a]" style={{ color: "#0c0b0a" }}>
                     <div className="flex items-center gap-3 min-w-0">
@@ -348,9 +384,17 @@ try {
                         </div>
                       </div>
                     </div>
-                    <span className={`queue-status-badge shrink-0 text-xs px-3 py-1.5 font-bold !text-[#fff8ed] ${hasTicket ? "queue-status-badge--reserved" : "queue-status-badge--waiting"}`}>
-                      {a.queueStatus ? queueStatusLabel(a.queueStatus) : "Pendiente turno"}
-                    </span>
+                    {hasTicket ? (
+                      <select className="border rounded-xl p-2 text-sm font-bold shrink-0 !bg-[#fffaf1] !text-[#0c0b0a]" value={a.queueStatus ?? "WAITING"} onChange={e => updateQueueStatus(a.queueTicketId, e.target.value)}>
+                        <option value="WAITING">{queueStatusLabel("WAITING")}</option>
+                        <option value="CALLED">{queueStatusLabel("CALLED")}</option>
+                        <option value="IN_CHAIR">{queueStatusLabel("IN_CHAIR")}</option>
+                        <option value="DONE">{queueStatusLabel("DONE")}</option>
+                        <option value="CANCELED">{queueStatusLabel("CANCELED")}</option>
+                      </select>
+                    ) : (
+                      <button className="border rounded-xl px-3 py-2 text-sm font-bold shrink-0 !bg-[#fffaf1] !text-[#0c0b0a]" onClick={() => promotePaidAppointment(a.appointmentId)}>Crear turno</button>
+                    )}
                   </div>
                 );
               })}
@@ -362,10 +406,10 @@ try {
             <div className="flex items-center gap-2 mb-3">
               <div className="w-3 h-3 rounded-full bg-amber-500"></div>
               <h3 className="font-bold text-base">Cola activa</h3>
-              <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 font-semibold">{queue.length}</span>
+              <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 font-semibold">{walkInQueue.length}</span>
             </div>
             <div className="space-y-2">
-              {queue.map((t: any) => {
+              {walkInQueue.map((t: any) => {
                 const isAppt = !!t.fromAppointment;
                 return (
                   <div key={t.id} className={`queue-admin-row rounded-2xl p-3 flex items-center justify-between gap-3 !text-[#0c0b0a] ${isAppt ? "queue-admin-row--reserved" : ""}`} style={{ color: "#0c0b0a" }}>
@@ -380,7 +424,7 @@ try {
                         {isAppt && t.scheduledAt && <div className="text-xs font-semibold !text-[#6d28d9]">{new Date(t.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>}
                       </div>
                     </div>
-                    <select className="border rounded-xl p-2 text-sm font-bold shrink-0 !bg-[#fffaf1] !text-[#0c0b0a]" value={t.status} onChange={async e => { await api.queueUpdateTicket(t.id, e.target.value); await loadQueue(); }}>
+                    <select className="border rounded-xl p-2 text-sm font-bold shrink-0 !bg-[#fffaf1] !text-[#0c0b0a]" value={t.status} onChange={e => updateQueueStatus(t.id, e.target.value)}>
                       <option value="WAITING">{queueStatusLabel("WAITING")}</option>
                       <option value="CALLED">{queueStatusLabel("CALLED")}</option>
                       <option value="IN_CHAIR">{queueStatusLabel("IN_CHAIR")}</option>
@@ -390,7 +434,7 @@ try {
                   </div>
                 );
               })}
-              {queue.length === 0 && <div className="text-sm text-slate-500 italic">Sin turnos activos.</div>}
+              {walkInQueue.length === 0 && <div className="text-sm text-slate-500 italic">Sin turnos activos.</div>}
             </div>
           </div>
         </div>
@@ -797,6 +841,10 @@ try {
         <AvailabilityEditor staffId={selectedStaffId} staff={staff} onPickStaff={setSelectedStaffId} />
       )}
 
+      {activeTab === "clientes" && (
+        <CustomersPanel />
+      )}
+
       {activeTab === "fidelizacion" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm">
           <h2 className="text-xl font-bold">Fidelización por puntos</h2>
@@ -808,17 +856,22 @@ try {
             <label className="text-sm ml-4">Puntos por Bs</label>
             <input type="number" className="border rounded-xl p-2 w-24" value={pointsPerBs} onChange={e => setPointsPerBs(Number(e.target.value))} />
             <button className="bg-slate-900 text-white rounded-xl px-4 py-2" onClick={async () => {
-              await api.adminUpdateOrgSettings({ loyalty: { enabled: loyaltyEnabled, pointsPerBs } });
+              await api.adminUpdateOrgSettings({ loyalty: { enabled: loyaltyEnabled, pointsPerBs, campaigns } });
               await loadOrg();
               alert("✅ Guardado");
             }}>Guardar</button>
           </div>
+
+          <CampaignsPanel
+            campaigns={campaigns}
+            onChange={async (nextCampaigns) => {
+              setCampaigns(nextCampaigns);
+              await api.adminUpdateOrgSettings({ loyalty: { enabled: loyaltyEnabled, pointsPerBs, campaigns: nextCampaigns } });
+              await loadOrg();
+            }}
+          />
         </div>
       )}
-
-      {activeTab === "comisiones" && (
-  <CommissionsPanel org={org} branches={branches} staff={staff} />
-)}
 
 {activeTab === "ajustes" && (
         <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-6">
@@ -973,6 +1026,38 @@ try {
       await api.adminUpdateOrgSettings({ cashPin });
       await loadOrg();
       alert("✅ Guardado");
+    }}>Guardar</button>
+  </div>
+</div>
+
+<div className="border rounded-2xl p-4 space-y-3">
+  <div className="font-semibold">Agenda, pagos y lista para barberos</div>
+  <p className="text-sm text-slate-600">Controla si un barbero ve todas las reservas/turnos o solo las asignadas a su usuario.</p>
+  <div className="flex flex-wrap gap-2 items-center">
+    <select className="border rounded-xl p-2" value={staffOperationalScope} onChange={e => setStaffOperationalScope(e.target.value as "all" | "own")}>
+      <option value="own">Solo su barbero</option>
+      <option value="all">Todos los barberos</option>
+    </select>
+    <button className="bg-slate-900 text-white rounded-xl px-4 py-2" onClick={async () => {
+      await api.adminUpdateOrgSettings({ staffOperationalScope });
+      await loadOrg();
+      alert("Guardado");
+    }}>Guardar</button>
+  </div>
+</div>
+
+<div className="border rounded-2xl p-4 space-y-3">
+  <div className="font-semibold">Reportes para barberos</div>
+  <p className="text-sm text-slate-600">Controla si un barbero ve los movimientos globales o solo sus propios importes.</p>
+  <div className="flex flex-wrap gap-2 items-center">
+    <select className="border rounded-xl p-2" value={staffCashReportScope} onChange={e => setStaffCashReportScope(e.target.value as "all" | "own")}>
+      <option value="own">Solo su barbero</option>
+      <option value="all">Todos los barberos</option>
+    </select>
+    <button className="bg-slate-900 text-white rounded-xl px-4 py-2" onClick={async () => {
+      await api.adminUpdateOrgSettings({ staffCashReportScope });
+      await loadOrg();
+      alert("Guardado");
     }}>Guardar</button>
   </div>
 </div>
@@ -1568,6 +1653,7 @@ const footerLines = [
           <div className="font-semibold">
             {new Date(appt.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} — {appt.service?.name}
           </div>
+          <div className="text-xs font-bold text-slate-700">Reserva #{String(appt.id).slice(-6).toUpperCase()}</div>
           <div className="text-sm text-slate-600">{appt.customer?.fullName} • {appt.staff?.displayName}</div>
           <div className="text-xs text-slate-500">Estado: {appt.status}</div>
           {appt.payment && (
@@ -1616,13 +1702,201 @@ const footerLines = [
   );
 }
 
-function CashProPanel({ branchId, branches, org }: { branchId: string; branches: any[]; org: any }) {
+function CustomersPanel() {
+  const [q, setQ] = useState("");
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 10, total: 0, totalPages: 1 });
+  const [loading, setLoading] = useState(false);
+
+  async function load(nextPage = page) {
+    setLoading(true);
+    try {
+      const r = await api.adminCustomers({ q: q.trim() || undefined, page: nextPage, pageSize: pagination.pageSize });
+      setCustomers(r.customers);
+      setPagination(r.pagination);
+      setPage(r.pagination.page);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load().catch(() => {}); }, []);
+
+  async function save(customer: any) {
+    await api.adminUpdateCustomer(customer.id, {
+      fullName: customer.fullName,
+      email: customer.email,
+      phone: customer.phone,
+      loyaltyPoints: Number(customer.loyaltyPoints ?? 0),
+      whatsappOptIn: Boolean(customer.whatsappOptIn),
+      preferredChannel: customer.preferredChannel || "both",
+    });
+    await load();
+    alert("Cliente guardado");
+  }
+
+  async function remove(customer: any) {
+    if (!confirm(`Eliminar cliente "${customer.fullName}"?`)) return;
+    try {
+      await api.adminDeleteCustomer(customer.id);
+      await load();
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo eliminar");
+    }
+  }
+
+  async function resetPassword(customer: any) {
+    const password = prompt(`Nueva contraseña para ${customer.fullName}:`);
+    if (password === null) return;
+    if (password.length < 6) return alert("La contraseña debe tener al menos 6 caracteres.");
+    try {
+      await api.adminResetCustomerPassword(customer.id, password);
+      alert("Contraseña restablecida.");
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo restablecer la contraseña");
+    }
+  }
+
+  return (
+    <div className="bg-white border rounded-2xl p-6 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold">Gestión de Clientes</h2>
+          <p className="text-sm text-slate-600 mt-1">Edita datos, elimina clientes sin historial y ajusta el estado de puntos.</p>
+        </div>
+        <div className="flex gap-2">
+          <input className="border rounded-xl p-2" placeholder="Buscar cliente" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") load(1); }} />
+          <button className="border rounded-xl px-3 py-2" onClick={() => load(1)}>{loading ? "Buscando..." : "Buscar"}</button>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {customers.map((c) => (
+          <div key={c.id} className="border rounded-2xl p-4">
+            <div className="grid md:grid-cols-6 gap-2">
+              <input className="border rounded-xl p-2 md:col-span-2" value={c.fullName} onChange={e => setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, fullName: e.target.value } : x))} />
+              <input className="border rounded-xl p-2 md:col-span-2" value={c.email} onChange={e => setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, email: e.target.value } : x))} />
+              <input className="border rounded-xl p-2" value={c.phone ?? ""} placeholder="Teléfono" onChange={e => setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, phone: e.target.value } : x))} />
+              <input className="border rounded-xl p-2" type="number" min="0" value={c.loyaltyPoints ?? 0} title="Puntos" onChange={e => setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, loyaltyPoints: Number(e.target.value) } : x))} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2 items-center">
+              <label className="flex gap-2 items-center text-sm"><input type="checkbox" checked={Boolean(c.whatsappOptIn)} onChange={e => setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, whatsappOptIn: e.target.checked } : x))} /> WhatsApp</label>
+              <select className="border rounded-xl p-2 text-sm" value={c.preferredChannel ?? "both"} onChange={e => setCustomers(prev => prev.map(x => x.id === c.id ? { ...x, preferredChannel: e.target.value } : x))}>
+                <option value="both">Email + WhatsApp</option>
+                <option value="email">Email</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
+              <span className="text-xs text-slate-500">Reservas: {c.appointmentsCount ?? 0} · Pagos: {c.paymentsCount ?? 0}</span>
+              <button className="bg-slate-900 text-white rounded-xl px-3 py-2 text-sm" onClick={() => save(c)}>Guardar</button>
+              <button className="border rounded-xl px-3 py-2 text-sm" onClick={() => resetPassword(c)}>Resetear contraseña</button>
+              <button className="border rounded-xl px-3 py-2 text-sm" onClick={() => remove(c)}>Eliminar</button>
+            </div>
+          </div>
+        ))}
+        {customers.length === 0 && <div className="text-sm text-slate-600">Sin clientes.</div>}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm">
+        <div className="text-slate-600">
+          Página <b>{pagination.page}</b> de <b>{pagination.totalPages}</b> · {pagination.total} clientes
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="border rounded-xl px-3 py-2 disabled:opacity-40" disabled={loading || pagination.page <= 1} onClick={() => load(pagination.page - 1)}>Anterior</button>
+          <button className="border rounded-xl px-3 py-2 disabled:opacity-40" disabled={loading || pagination.page >= pagination.totalPages} onClick={() => load(pagination.page + 1)}>Siguiente</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CampaignsPanel({ campaigns, onChange }: { campaigns: any[]; onChange: (campaigns: any[]) => Promise<void> }) {
+  const [draft, setDraft] = useState({ name: "", reward: "", startDate: isoDateLocal(), endDate: isoDateLocal(), active: true });
+  const [saving, setSaving] = useState(false);
+
+  async function persist(next: any[]) {
+    setSaving(true);
+    try {
+      await onChange(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function add() {
+    if (!draft.name.trim()) return alert("Nombre requerido");
+    const next = [
+      ...campaigns,
+      { id: `camp_${Date.now()}`, ...draft, name: draft.name.trim(), reward: draft.reward.trim() },
+    ];
+    setDraft({ name: "", reward: "", startDate: isoDateLocal(), endDate: isoDateLocal(), active: true });
+    await persist(next);
+  }
+
+  return (
+    <div className="mt-6 border-t pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-bold">Campañas</h3>
+          <p className="text-sm text-slate-600 mt-1">Crea y gestiona campañas de fidelización.</p>
+        </div>
+        {saving && <span className="text-xs text-slate-500">Guardando...</span>}
+      </div>
+
+      <div className="mt-3 grid md:grid-cols-5 gap-2">
+        <input className="border rounded-xl p-2 md:col-span-2" placeholder="Nombre de campaña" value={draft.name} onChange={e => setDraft(prev => ({ ...prev, name: e.target.value }))} />
+        <input className="border rounded-xl p-2" placeholder="Beneficio" value={draft.reward} onChange={e => setDraft(prev => ({ ...prev, reward: e.target.value }))} />
+        <input className="border rounded-xl p-2" type="date" value={draft.startDate} onChange={e => setDraft(prev => ({ ...prev, startDate: e.target.value }))} />
+        <div className="flex gap-2">
+          <input className="border rounded-xl p-2 min-w-0" type="date" value={draft.endDate} onChange={e => setDraft(prev => ({ ...prev, endDate: e.target.value }))} />
+          <button className="bg-slate-900 text-white rounded-xl px-3 py-2" onClick={add} disabled={saving}>Crear</button>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {campaigns.map((c) => (
+          <div key={c.id} className="border rounded-2xl p-3 grid md:grid-cols-6 gap-2 items-center">
+            <input className="border rounded-xl p-2 md:col-span-2" value={c.name ?? ""} onChange={e => persist(campaigns.map(x => x.id === c.id ? { ...x, name: e.target.value } : x))} />
+            <input className="border rounded-xl p-2" value={c.reward ?? ""} onChange={e => persist(campaigns.map(x => x.id === c.id ? { ...x, reward: e.target.value } : x))} />
+            <input className="border rounded-xl p-2" type="date" value={c.startDate ?? ""} onChange={e => persist(campaigns.map(x => x.id === c.id ? { ...x, startDate: e.target.value } : x))} />
+            <input className="border rounded-xl p-2" type="date" value={c.endDate ?? ""} onChange={e => persist(campaigns.map(x => x.id === c.id ? { ...x, endDate: e.target.value } : x))} />
+            <div className="flex gap-2">
+              <button className="border rounded-xl px-3 py-2 text-sm" onClick={() => persist(campaigns.map(x => x.id === c.id ? { ...x, active: !x.active } : x))}>{c.active === false ? "Activar" : "Pausar"}</button>
+              <button className="border rounded-xl px-3 py-2 text-sm" onClick={() => persist(campaigns.filter(x => x.id !== c.id))}>Eliminar</button>
+            </div>
+          </div>
+        ))}
+        {campaigns.length === 0 && <div className="text-sm text-slate-600">Aún no hay campañas.</div>}
+      </div>
+    </div>
+  );
+}
+
+function CashProPanel({
+  branchId,
+  branches,
+  org,
+  staff,
+  currentUser,
+  staffCashReportScope,
+  onReloadOrg,
+}: {
+  branchId: string;
+  branches: any[];
+  org: any;
+  staff: any[];
+  currentUser: any;
+  staffCashReportScope: "all" | "own";
+  onReloadOrg: () => Promise<void>;
+}) {
   const [from, setFrom] = useState<string>(() => {
     const d = new Date(); d.setDate(d.getDate()-7);
     return d.toISOString().slice(0,10);
   });
   const [to, setTo] = useState<string>(() => new Date().toISOString().slice(0,10));
   const [sessions, setSessions] = useState<any[]>([]);
+  const [currentCashSession, setCurrentCashSession] = useState<any | null>(null);
+  const [currentCashTotals, setCurrentCashTotals] = useState<any | null>(null);
   const [selected, setSelected] = useState<any | null>(null);
   const [report, setReport] = useState<any | null>(null);
   const [openingCash, setOpeningCash] = useState<number>(0);
@@ -1630,26 +1904,78 @@ function CashProPanel({ branchId, branches, org }: { branchId: string; branches:
   const [movementAmount, setMovementAmount] = useState<number>(0);
   const [movementReason, setMovementReason] = useState<string>("");
   const [movementType, setMovementType] = useState<"IN"|"OUT">("IN");
+  const [movementPreview, setMovementPreview] = useState<any | null>(null);
+  const [savingMovement, setSavingMovement] = useState(false);
+  const [closePreview, setClosePreview] = useState<any | null>(null);
+  const [closePin, setClosePin] = useState("");
+  const [loadingClosePreview, setLoadingClosePreview] = useState(false);
+  const [closingCash, setClosingCash] = useState(false);
+  const isStaffUser = currentUser?.role === "STAFF";
 
   async function loadSessions() {
-    const r = await api.cashSessions({ branchId, from, to });
+    if (isStaffUser) return;
+    const [r, current] = await Promise.all([
+      api.cashSessions({ branchId, from, to }),
+      api.cashCurrent(branchId),
+    ]);
     setSessions(r.sessions);
+    setCurrentCashSession(current.session ?? null);
+    setCurrentCashTotals(current.totals ?? null);
     if (selected) {
       const still = r.sessions.find((s: any) => s.id === selected.id);
       setSelected(still ?? null);
     }
   }
 
-  useEffect(() => { if (branchId) loadSessions().catch(()=>{}); }, [branchId, from, to]);
+  useEffect(() => { if (branchId && !isStaffUser) loadSessions().catch(()=>{}); }, [branchId, from, to, isStaffUser]);
 
   async function openCash() {
-    await api.cashOpen(branchId, openingCash);
-    await loadSessions();
+    const pin = window.prompt("PIN de caja para abrir");
+    if (!pin?.trim()) return;
+    try {
+      await api.cashOpen(branchId, openingCash, pin.trim());
+      await loadSessions();
+      alert("Caja abierta");
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo abrir caja");
+    }
   }
 
   async function closeCash(sessionId: string) {
-    await api.cashClose(branchId, countedCash, "Cierre desde Admin");
-    await loadSessions();
+    setLoadingClosePreview(true);
+    try {
+      const currentReport: any = await api.cashSessionReport(sessionId);
+      setReport(currentReport);
+      setClosePin("");
+      setClosePreview(currentReport);
+      setLoadingClosePreview(false);
+    } catch (e: any) {
+      setLoadingClosePreview(false);
+      alert(e?.message ?? "No se pudo cerrar caja");
+    }
+  }
+
+  async function confirmCloseCash() {
+    if (!closePreview) return;
+    if (!closePin.trim()) return alert("Ingresa el PIN de caja para confirmar el cierre.");
+    setClosingCash(true);
+    try {
+      const closed: any = await api.cashClose(branchId, countedCash, closePin.trim(), "Cierre desde Admin");
+      const updatedReport = {
+        ...closePreview,
+        session: { ...closePreview.session, ...closed.session },
+        summary: { ...closePreview.summary, ...closed.summary },
+      };
+      setReport(updatedReport);
+      setClosePreview(null);
+      setClosePin("");
+      await loadSessions();
+      alert("Caja cerrada");
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo cerrar caja");
+    } finally {
+      setClosingCash(false);
+    }
   }
 
   async function loadReport(sessionId: string) {
@@ -1687,23 +2013,12 @@ function CashProPanel({ branchId, branches, org }: { branchId: string; branches:
 
   const branchLine = `${report.session.branch.name}${report.session.branch.address ? " • " + report.session.branch.address : ""}`;
 
-  const payRows = (report.payments ?? [])
-    .map((p: any) => `
-      <tr>
-        <td>${new Date(p.paidAt).toLocaleString()}</td>
-        <td>${p.method}</td>
-        <td style="text-align:right">${p.amountTotal}</td>
-        <td style="text-align:right">${p.amountCash}</td>
-        <td style="text-align:right">${p.amountQr}</td>
-        <td>${p.service}</td>
-        <td>${p.staff}</td>
-      </tr>`).join("");
-
+  const payRows = "";
   const movRows = (report.movements ?? [])
     .map((m: any) => `
       <tr>
         <td>${new Date(m.createdAt).toLocaleString()}</td>
-        <td>${m.type}</td>
+        <td>${cashMovementTypeLabel(m.type)}</td>
         <td style="text-align:right">${m.amount}</td>
         <td>${m.reason}</td>
       </tr>`).join("");
@@ -1750,6 +2065,7 @@ function CashProPanel({ branchId, branches, org }: { branchId: string; branches:
         <div class="kpi">Apertura efectivo: <b>${s.openingCash}</b></div>
         <div class="kpi">Entradas: <b>${s.movIn}</b> / Salidas: <b>${s.movOut}</b></div>
         <div class="kpi">Cash (pagos): <b>${s.cashFromPayments}</b> • QR (pagos): <b>${s.qrFromPayments}</b></div>
+        <div class="kpi">Kiosko servicios: <b>${s.kioskServiceSales ?? 0}</b></div>
         <div class="kpi">Total ventas: <b>${s.totalSales}</b></div>
         <div class="kpi">Efectivo esperado: <b>${s.expectedCash}</b></div>
         <div class="kpi">Efectivo contado: <b>${s.counted ?? ""}</b> • Diferencia: <b>${s.diff ?? ""}</b></div>
@@ -1764,7 +2080,7 @@ function CashProPanel({ branchId, branches, org }: { branchId: string; branches:
       </table>
     </div>
 
-    <div class="box">
+    <div class="box" style="display:none">
       <div style="font-weight:800; margin-bottom:6px">Pagos</div>
       <table>
         <thead><tr><th>Fecha</th><th>Método</th><th>Total</th><th>Cash</th><th>QR</th><th>Servicio</th><th>Barbero</th></tr></thead>
@@ -1842,6 +2158,7 @@ function printTicket() {
         <div class="row"><span>Total ventas</span><span class="big">${s.totalSales}</span></div>
         <div class="row"><span>QR</span><span>${s.qrFromPayments}</span></div>
         <div class="row"><span>Efectivo (pagos)</span><span>${s.cashFromPayments}</span></div>
+        <div class="row"><span>Kiosko servicios</span><span>${s.kioskServiceSales ?? 0}</span></div>
         <div class="row"><span>Entradas</span><span>${s.movIn}</span></div>
         <div class="row"><span>Salidas</span><span>${s.movOut}</span></div>
         <div class="row"><span>Esperado cash</span><span class="big">${s.expectedCash}</span></div>
@@ -1861,16 +2178,80 @@ function printTicket() {
 }
 
 async function addMovement() {
+    if (!isCashOpen) return alert("Abre la caja antes de registrar entradas o salidas.");
     if (!movementReason.trim() || movementAmount <= 0) return alert("Completa motivo y monto");
-    await api.cashAddMovement({ branchId, type: movementType, amount: movementAmount, reason: movementReason });
-    setMovementAmount(0); setMovementReason("");
-    await loadSessions();
-    if (selected) await loadReport(selected.id);
+    setMovementPreview({
+      type: movementType,
+      amount: movementAmount,
+      reason: movementReason.trim(),
+      expectedCashBefore: currentCashTotals?.expectedCash ?? 0,
+    });
   }
 
-  const openSession = sessions.find((s: any) => s.status === "OPEN");
+async function confirmMovement() {
+    if (!movementPreview) return;
+    setSavingMovement(true);
+    try {
+      await api.cashAddMovement({
+        branchId,
+        type: movementPreview.type,
+        amount: movementPreview.amount,
+        reason: movementPreview.reason,
+      });
+      setMovementAmount(0); setMovementReason("");
+      setMovementPreview(null);
+      await loadSessions();
+      if (selected) await loadReport(selected.id);
+    } catch (e: any) {
+      alert(e?.message ?? "No se pudo guardar el movimiento");
+    } finally {
+      setSavingMovement(false);
+    }
+  }
+
+  const openSession = currentCashSession ?? sessions.find((s: any) => s.status === "OPEN");
+  const isCashOpen = Boolean(openSession);
+  const closeSummary = closePreview?.summary ?? {};
+  const closeExpectedCash = Number(closeSummary.expectedCash ?? 0);
+  const closeDiff = countedCash - closeExpectedCash;
+  const movementExpectedBefore = Number(movementPreview?.expectedCashBefore ?? 0);
+  const movementExpectedAfter = movementPreview
+    ? movementPreview.type === "IN"
+      ? movementExpectedBefore + Number(movementPreview.amount ?? 0)
+      : movementExpectedBefore - Number(movementPreview.amount ?? 0)
+    : movementExpectedBefore;
+
+  if (isStaffUser) {
+    return (
+      <CashMovementReport
+        org={org}
+        branches={branches}
+        staff={staff}
+        branchId={branchId}
+        from={from}
+        to={to}
+        setFrom={setFrom}
+        setTo={setTo}
+        currentUser={currentUser}
+        staffCashReportScope={staffCashReportScope}
+      />
+    );
+  }
 
   return (
+    <div className="space-y-4">
+    <CashMovementReport
+      org={org}
+      branches={branches}
+      staff={staff}
+      branchId={branchId}
+      from={from}
+      to={to}
+      setFrom={setFrom}
+      setTo={setTo}
+      currentUser={currentUser}
+      staffCashReportScope={staffCashReportScope}
+    />
     <div className="bg-white border rounded-2xl p-6 shadow-sm">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
@@ -1900,27 +2281,44 @@ async function addMovement() {
           </div>
 
           <div className="mt-4 border-t pt-4">
-            <div className="font-semibold">Apertura / Cierre</div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-semibold">Apertura / Cierre</div>
+              <span className={`text-xs font-bold rounded-full px-3 py-1 ${isCashOpen ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                {isCashOpen ? "Caja Abierta" : "Caja Cerrada"}
+              </span>
+            </div>
             <div className="mt-2 flex flex-wrap gap-2 items-center">
               <input type="number" className="border rounded-xl p-2 w-28" placeholder="Apertura" value={openingCash} onChange={e=>setOpeningCash(Number(e.target.value))} />
-              <button className="bg-slate-900 text-white rounded-xl px-3 py-2" disabled={!!openSession} onClick={openCash}>Abrir</button>
+              <button className="bg-slate-900 text-white rounded-xl px-3 py-2 disabled:opacity-50" disabled={isCashOpen} onClick={openCash}>Abrir</button>
               <input type="number" className="border rounded-xl p-2 w-28" placeholder="Contado" value={countedCash} onChange={e=>setCountedCash(Number(e.target.value))} />
-              <button className="border rounded-xl px-3 py-2" disabled={!openSession} onClick={()=> openSession && closeCash(openSession.id)}>Cerrar</button>
+              <button className="border rounded-xl px-3 py-2 disabled:opacity-50" disabled={!isCashOpen || loadingClosePreview} onClick={()=> openSession && closeCash(openSession.id)}>{loadingClosePreview ? "Preparando..." : "Cerrar"}</button>
             </div>
+            <div className="text-xs text-slate-600 mt-2">Apertura y cierre requieren PIN. Antes de cerrar se mostrará el reporte para confirmar.</div>
             {openSession && <div className="text-xs text-slate-600 mt-2">Sesión abierta: {openSession.id}</div>}
+            {isCashOpen && currentCashTotals && <div className="text-xs text-slate-600 mt-1">Efectivo esperado: <b>Bs {currentCashTotals.expectedCash ?? 0}</b></div>}
           </div>
 
           <div className="mt-4 border-t pt-4">
             <div className="font-semibold">Movimiento de caja</div>
             <div className="mt-2 flex flex-wrap gap-2 items-center">
-              <select className="border rounded-xl p-2" value={movementType} onChange={e=>setMovementType(e.target.value as any)}>
-                <option value="IN">ENTRADA</option>
-                <option value="OUT">SALIDA</option>
-              </select>
+              <div className="inline-flex rounded-xl border overflow-hidden">
+                <button type="button" className={`px-3 py-2 text-sm font-semibold ${movementType === "IN" ? "bg-slate-900 text-white" : "bg-white text-slate-700"}`} onClick={() => setMovementType("IN")}>ENTRADA</button>
+                <button type="button" className={`px-3 py-2 text-sm font-semibold border-l ${movementType === "OUT" ? "bg-slate-900 text-white" : "bg-white text-slate-700"}`} onClick={() => setMovementType("OUT")}>SALIDA</button>
+              </div>
               <input type="number" className="border rounded-xl p-2 w-28" placeholder="Monto" value={movementAmount} onChange={e=>setMovementAmount(Number(e.target.value))} />
-              <input className="border rounded-xl p-2 flex-1 min-w-[180px]" placeholder="Motivo" value={movementReason} onChange={e=>setMovementReason(e.target.value)} />
-              <button className="bg-slate-900 text-white rounded-xl px-3 py-2" onClick={addMovement}>Guardar</button>
+              <input
+                className="border rounded-xl p-2 flex-1 min-w-[180px]"
+                type="text"
+                name="cash-movement-reason"
+                autoComplete="off"
+                inputMode="text"
+                placeholder="Motivo: compra, vuelto, retiro"
+                value={movementReason}
+                onChange={e=>setMovementReason(e.target.value)}
+              />
+              <button className="bg-slate-900 text-white rounded-xl px-3 py-2 disabled:opacity-50" disabled={!isCashOpen} onClick={addMovement}>Guardar</button>
             </div>
+            {!isCashOpen && <div className="text-xs text-rose-700 mt-2">Abre la caja antes de registrar entradas o salidas.</div>}
           </div>
         </div>
 
@@ -1936,11 +2334,12 @@ async function addMovement() {
               <div className="text-sm">Estado: <b>{cashSessionStatusLabel(report.session.status)}</b></div>
               <div className="text-sm">Apertura efectivo: <b>{report.summary.openingCash}</b></div>
               <div className="text-sm">Cash pagos: <b>{report.summary.cashFromPayments}</b> • QR pagos: <b>{report.summary.qrFromPayments}</b></div>
+              <div className="text-sm">Kiosko servicios: <b>{report.summary.kioskServiceSales ?? 0}</b></div>
               <div className="text-sm">Entradas: <b>{report.summary.movIn}</b> • Salidas: <b>{report.summary.movOut}</b></div>
               <div className="text-sm">Efectivo esperado: <b>{report.summary.expectedCash}</b></div>
               {report.summary.counted !== null && <div className="text-sm">Contado: <b>{report.summary.counted}</b> • Diferencia: <b>{report.summary.diff}</b></div>}
-              <div className="mt-3 text-sm font-semibold">Pagos: {report.payments.length}</div>
-              <div className="max-h-[320px] overflow-auto border rounded-xl">
+              <div className="hidden mt-3 text-sm font-semibold">Pagos: {report.payments.length}</div>
+              <div className="hidden max-h-[320px] overflow-auto border rounded-xl">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50">
@@ -1967,6 +2366,259 @@ async function addMovement() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+    {movementPreview && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+          <div className="border-b pb-3">
+            <h3 className="text-lg font-bold">Confirmar transacción</h3>
+            <p className="text-sm text-slate-600 mt-1">Revisa el movimiento antes de afectar la caja.</p>
+          </div>
+
+          <div className="mt-4 space-y-3 text-sm">
+            <div className={`rounded-xl border p-3 ${movementPreview.type === "IN" ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"}`}>
+              <div className="text-xs text-slate-500">Tipo</div>
+              <div className="text-xl font-extrabold">{cashMovementTypeLabel(movementPreview.type)}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border p-3">
+                <div className="text-xs text-slate-500">Monto</div>
+                <div className="font-bold">Bs {movementPreview.amount}</div>
+              </div>
+              <div className="rounded-xl border p-3">
+                <div className="text-xs text-slate-500">Caja esperada</div>
+                <div className="font-bold">Bs {movementExpectedBefore} -&gt; Bs {movementExpectedAfter}</div>
+              </div>
+            </div>
+            <div className="rounded-xl border p-3">
+              <div className="text-xs text-slate-500">Motivo</div>
+              <div className="font-semibold break-words">{movementPreview.reason}</div>
+            </div>
+          </div>
+
+          <div className="mt-5 flex justify-end gap-2">
+            <button className="border rounded-xl px-4 py-2" onClick={() => setMovementPreview(null)} disabled={savingMovement}>Cancelar</button>
+            <button className="bg-slate-900 text-white rounded-xl px-4 py-2 disabled:opacity-50" onClick={confirmMovement} disabled={savingMovement}>
+              {savingMovement ? "Guardando..." : "Confirmar transacción"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {closePreview && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-xl">
+          <div className="flex items-start justify-between gap-3 border-b pb-3">
+            <div>
+              <h3 className="text-lg font-bold">Cierre de caja</h3>
+              <p className="text-sm text-slate-600">Revisa el reporte esperado antes de confirmar.</p>
+            </div>
+            <button className="border rounded-xl px-3 py-2 text-sm" onClick={() => { setClosePreview(null); setClosePin(""); }} disabled={closingCash}>Cancelar</button>
+          </div>
+
+          <div className="mt-4 grid sm:grid-cols-2 gap-3 text-sm">
+            <div className="border rounded-xl p-3">
+              <div className="text-xs text-slate-500">Sucursal</div>
+              <div className="font-bold">{closePreview.session?.branch?.name ?? "-"}</div>
+            </div>
+            <div className="border rounded-xl p-3">
+              <div className="text-xs text-slate-500">Sesion</div>
+              <div className="font-bold">{String(closePreview.session?.id ?? "").slice(-8)}</div>
+            </div>
+            <div className="border rounded-xl p-3">
+              <div className="text-xs text-slate-500">Apertura</div>
+              <div className="font-bold">Bs {closeSummary.openingCash ?? 0}</div>
+            </div>
+            <div className="border rounded-xl p-3">
+              <div className="text-xs text-slate-500">Entradas / Salidas</div>
+              <div className="font-bold">Bs {closeSummary.movIn ?? 0} / Bs {closeSummary.movOut ?? 0}</div>
+            </div>
+            <div className="border rounded-xl p-3">
+              <div className="text-xs text-slate-500">Ventas servicios</div>
+              <div className="font-bold">Bs {closeSummary.serviceSales ?? 0}</div>
+              <div className="text-xs text-slate-500">Cash {closeSummary.cashFromPayments ?? 0} / QR {closeSummary.qrFromPayments ?? 0} / Kiosko {closeSummary.kioskServiceSales ?? 0}</div>
+            </div>
+            <div className="border rounded-xl p-3">
+              <div className="text-xs text-slate-500">Ventas tienda</div>
+              <div className="font-bold">Bs {closeSummary.productSales ?? 0}</div>
+              <div className="text-xs text-slate-500">Cash {closeSummary.cashFromProductSales ?? 0} / QR {closeSummary.qrFromProductSales ?? 0}</div>
+            </div>
+            <div className="border rounded-xl p-3 bg-slate-50">
+              <div className="text-xs text-slate-500">Efectivo esperado</div>
+              <div className="text-2xl font-extrabold">Bs {closeExpectedCash}</div>
+            </div>
+            <div className="border rounded-xl p-3 bg-slate-50">
+              <div className="text-xs text-slate-500">Contado / Diferencia</div>
+              <div className="text-2xl font-extrabold">Bs {countedCash} / Bs {closeDiff}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 border-t pt-4">
+            <label className="text-sm font-semibold">PIN de caja</label>
+            <input
+              className="mt-2 w-full border rounded-xl p-3"
+              type="password"
+              value={closePin}
+              onChange={e => setClosePin(e.target.value)}
+              placeholder="Ingresa PIN para confirmar"
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="border rounded-xl px-4 py-2" onClick={() => { setClosePreview(null); setClosePin(""); }} disabled={closingCash}>Volver</button>
+              <button className="bg-slate-900 text-white rounded-xl px-4 py-2 disabled:opacity-50" onClick={confirmCloseCash} disabled={closingCash}>{closingCash ? "Cerrando..." : "Confirmar cierre"}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </div>
+  );
+}
+
+function CashMovementReport({
+  branches,
+  staff,
+  from,
+  to,
+  setFrom,
+  setTo,
+  currentUser,
+  staffCashReportScope,
+}: {
+  org: any;
+  branches: any[];
+  staff: any[];
+  branchId: string;
+  from: string;
+  to: string;
+  setFrom: (value: string) => void;
+  setTo: (value: string) => void;
+  currentUser: any;
+  staffCashReportScope: "all" | "own";
+}) {
+  const [reportBranchId, setReportBranchId] = useState("");
+  const [reportStaffId, setReportStaffId] = useState("");
+  const [report, setReport] = useState<any | null>(null);
+  const [loading, setLoading] = useState(false);
+  const isStaffUser = currentUser?.role === "STAFF";
+  const staffLockedToOwn = isStaffUser && staffCashReportScope !== "all";
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await api.cashMovementReport({
+        from,
+        to,
+        branchId: reportBranchId || undefined,
+        staffId: staffLockedToOwn ? currentUser?.staffId || undefined : reportStaffId || undefined,
+      });
+      setReport(r);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load().catch(() => {}); }, [from, to, reportBranchId, reportStaffId, staffCashReportScope, currentUser?.staffId]);
+
+  function exportCsv() {
+    const rows = report?.rows ?? [];
+    const header = ["Barbero","Reservas","Total reservas","Cash reservas","QR reservas","Kiosko","Kiosko estimado","Tienda","Total tienda","Comision"].join(",");
+    const lines = rows.map((r: any) => [
+      r.staffName,
+      r.reservationCount,
+      r.reservationTotal,
+      r.reservationCash,
+      r.reservationQr,
+      r.kioskCount,
+      r.kioskEstimatedTotal,
+      r.storeCount,
+      r.storeTotal,
+      r.commissionTotal,
+    ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","));
+    const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `movimientos_efectivo_${from}_a_${to}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  const totals = report?.totals ?? {};
+
+  return (
+    <div className="bg-white border rounded-2xl p-6 shadow-sm">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold">Movimientos de Efectivo</h2>
+          <p className="text-sm text-slate-600 mt-1">Reporte global y por barbero de reservas, kiosko, tienda y comisiones.</p>
+        </div>
+        <div className="flex flex-wrap gap-2 items-center">
+          <label className="text-sm">Desde</label>
+          <input type="date" className="border rounded-xl p-2" value={from} onChange={e => setFrom(e.target.value)} />
+          <label className="text-sm">Hasta</label>
+          <input type="date" className="border rounded-xl p-2" value={to} onChange={e => setTo(e.target.value)} />
+          <button className="border rounded-xl px-3 py-2" onClick={load} disabled={loading}>{loading ? "Cargando..." : "Refrescar"}</button>
+          <button className="border rounded-xl px-3 py-2" onClick={exportCsv} disabled={!report}>CSV</button>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <select className="border rounded-xl p-2" value={reportBranchId} onChange={e => setReportBranchId(e.target.value)}>
+          <option value="">Todas las sucursales</option>
+          {branches.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        <select className="border rounded-xl p-2" value={staffLockedToOwn ? (currentUser?.staffId ?? "") : reportStaffId} onChange={e => setReportStaffId(e.target.value)} disabled={staffLockedToOwn}>
+          <option value="">Todos los barberos</option>
+          {staff.map((s: any) => <option key={s.id} value={s.id}>{s.displayName}</option>)}
+        </select>
+        {staffLockedToOwn && <div className="text-xs text-slate-500 self-center">Vista limitada a tu usuario.</div>}
+      </div>
+
+      <div className="mt-4 grid md:grid-cols-4 gap-3">
+        <div className="border rounded-2xl p-3"><div className="text-xs text-slate-500">Reservas</div><div className="text-2xl font-bold">Bs {totals.reservationTotal ?? 0}</div><div className="text-xs">Cash {totals.reservationCash ?? 0} / QR {totals.reservationQr ?? 0}</div></div>
+        <div className="border rounded-2xl p-3"><div className="text-xs text-slate-500">Kiosko</div><div className="text-2xl font-bold">{totals.kioskCount ?? 0}</div><div className="text-xs">Estimado Bs {totals.kioskEstimatedTotal ?? 0}</div></div>
+        <div className="border rounded-2xl p-3"><div className="text-xs text-slate-500">Tienda</div><div className="text-2xl font-bold">Bs {totals.storeTotal ?? 0}</div><div className="text-xs">Cash {totals.storeCash ?? 0} / QR {totals.storeQr ?? 0}</div></div>
+        <div className="border rounded-2xl p-3"><div className="text-xs text-slate-500">Comisiones</div><div className="text-2xl font-bold">Bs {totals.commissionTotal ?? 0}</div><div className="text-xs">Reservas + Kiosko, neto</div></div>
+      </div>
+
+      <div className="mt-4 border rounded-2xl overflow-hidden">
+        <table className="w-full table-fixed text-xs sm:text-sm">
+          <thead>
+            <tr className="bg-slate-50">
+              <th className="w-[18%] p-2 text-left">Barbero</th>
+              <th className="w-[20%] p-2 text-right">Reservas</th>
+              <th className="w-[18%] p-2 text-right">Cash / QR</th>
+              <th className="w-[16%] p-2 text-right">Kiosko</th>
+              <th className="w-[16%] p-2 text-right">Tienda</th>
+              <th className="w-[12%] p-2 text-right">Com.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(report?.rows ?? []).map((r: any) => (
+              <tr key={r.staffId ?? "sin_barbero"} className="border-t">
+                <td className="p-2 font-semibold truncate">{r.staffName}</td>
+                <td className="p-2 text-right">
+                  <div className="font-semibold">Bs {r.reservationTotal}</div>
+                  <div className="text-[11px] text-slate-500">{r.reservationCount} pagos</div>
+                </td>
+                <td className="p-2 text-right">{r.reservationCash} / {r.reservationQr}</td>
+                <td className="p-2 text-right">
+                  <div>{r.kioskCount}</div>
+                  <div className="text-[11px] text-slate-500">Bs {r.kioskEstimatedTotal}</div>
+                </td>
+                <td className="p-2 text-right">
+                  <div>{r.storeCount} / Bs {r.storeTotal}</div>
+                </td>
+                <td className="p-2 text-right font-bold">Bs {r.commissionTotal}</td>
+              </tr>
+            ))}
+            {(report?.rows ?? []).length === 0 && <tr><td className="p-3 text-slate-600" colSpan={6}>Sin movimientos en el rango.</td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -2033,6 +2685,18 @@ function CommissionsPanel({ org, branches, staff }: { org: any; branches: any[];
   const wa = org?.settings?.whatsappDisplayNumber ?? "";
   const branchName = branches.find((b:any)=>b.id===branchId)?.name ?? "Todas";
   const staffName = staff.find((s:any)=>s.id===staffId)?.displayName ?? "Todos";
+  const company = (org?.settings?.company ?? {}) as any;
+  const pr = (org?.settings?.print ?? {}) as any;
+  const rs = String(company.razonSocial ?? "");
+  const nit = String(company.nit ?? "");
+  const phone = String(company.phone ?? "");
+  const email = String(company.email ?? "");
+  const companyAddr = String(company.address ?? "");
+  const showRS = Boolean(pr.showRazonSocial ?? true);
+  const showNIT = Boolean(pr.showNit ?? true);
+  const showAddr = Boolean(pr.showAddress ?? false);
+  const showPhone = Boolean(pr.showPhone ?? false);
+  const showEmail = Boolean(pr.showEmail ?? false);
 
   const bodyRows = rows.map((r: any) => `<tr><td>${r.staffName}</td><td style="text-align:right">${r.count}</td><td style="text-align:right">${r.amount}</td></tr>`).join("");
 

@@ -56,6 +56,7 @@ export default function Booking() {
   const [me, setMe] = useState<any>(null);
   const hasToken = !!getToken();
   const isCustomerSession = me?.role === "CUSTOMER";
+  const loggedName = me?.fullName || me?.staffName || me?.email || "";
   const selectedBranch = useMemo(() => branches.find((branch) => branch.id === branchId), [branches, branchId]);
   const branchTimezone = selectedBranch?.timezone || "America/La_Paz";
   const today = isoDateInTimeZone(new Date(), branchTimezone);
@@ -144,6 +145,15 @@ useEffect(() => {
     } catch (e:any) {
       setAuthErr(String(e?.message ?? e));
     }
+  }
+
+  function forgotPasswordMessage() {
+    return [
+      "Hola, olvide mi contraseña y necesito ayuda para restablecerla.",
+      email.trim() ? `Email: ${email.trim()}` : "",
+      phone.trim() ? `WhatsApp: ${phone.trim()}` : "",
+      fullName.trim() ? `Nombre: ${fullName.trim()}` : "",
+    ].filter(Boolean).join("\n");
   }
 
   async function book() {
@@ -331,6 +341,14 @@ useEffect(() => {
                 <label className="text-sm">Password</label>
                 <input className="w-full border rounded-xl px-3 py-2" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
               </div>
+              <a
+                href={`https://wa.me/${paymentWhatsapp}?text=${encodeURIComponent(forgotPasswordMessage())}`}
+                target="_blank"
+                rel="noreferrer"
+                className="block rounded-xl border border-emerald-700 px-3 py-2 text-center text-sm font-bold text-emerald-800"
+              >
+                Olvide mi contraseña por WhatsApp
+              </a>
               {authErr && <div className="text-sm text-red-600 break-words">{authErr}</div>}
               <button className="w-full rounded-xl bg-slate-900 text-white py-2" onClick={doAuth}>
                 {mode === "login" ? "Entrar" : "Crear cuenta"}
@@ -340,7 +358,11 @@ useEffect(() => {
           </>
         ) : (
           <div className="mt-4">
-            <div className="text-sm">Sesión activa ✅</div>
+            <div className="rounded-xl border bg-slate-50 p-3">
+              <div className="text-xs font-semibold uppercase text-slate-500">Sesion activa</div>
+              <div className="mt-1 text-lg font-bold">{loggedName || "Usuario"}</div>
+              {me?.email && <div className="text-xs text-slate-500">{me.email}</div>}
+            </div>
             {me?.role && me.role !== "CUSTOMER" && (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                 Esta sesion es de Admin/Barbero. Para reservar, cierra sesion y entra como cliente.
